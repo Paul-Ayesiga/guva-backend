@@ -1,0 +1,56 @@
+{
+  "_comment": "Minimal GUVA realm for local development. Mirrors the role and scope catalogue described in WS2-02 of the task list. NOT for production — production Keycloak realms are exported from staging via the admin CLI and version-controlled in the infra repo.",
+  "realm": "guva",
+  "enabled": true,
+  "displayName": "GUVA (Local Development)",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 3600,
+  "refreshTokenMaxReuse": 0,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "clientScopes": [
+    { "name": "verify:citizen", "protocol": "openid-connect", "description": "Verify citizen identity attributes" },
+    { "name": "verify:business", "protocol": "openid-connect", "description": "Verify business registration and status" },
+    { "name": "verify:tax", "protocol": "openid-connect", "description": "Verify tax identification and compliance" },
+    { "name": "verify:land", "protocol": "openid-connect", "description": "Verify land ownership and encumbrance" },
+    { "name": "verify:institution", "protocol": "openid-connect", "description": "Verify institution registration" },
+    { "name": "verify:education", "protocol": "openid-connect", "description": "Verify educational qualifications" },
+    { "name": "consent:read", "protocol": "openid-connect", "description": "Read consent records" },
+    { "name": "consent:write", "protocol": "openid-connect", "description": "Grant or revoke consent" },
+    { "name": "audit:read", "protocol": "openid-connect", "description": "Read audit log entries" },
+    { "name": "webhooks:manage", "protocol": "openid-connect", "description": "Register and manage webhook subscriptions" },
+    { "name": "admin:consumers", "protocol": "openid-connect", "description": "Administer consumer registrations" }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "consumer", "description": "Generic API consumer" },
+      { "name": "mda-consumer", "description": "Ministry / Department / Agency consumer" },
+      { "name": "bank-consumer", "description": "Licensed bank consumer" },
+      { "name": "telecom-consumer", "description": "Licensed telecom consumer" },
+      { "name": "developer-consumer", "description": "Accredited developer (sandbox-first)" },
+      { "name": "platform-admin", "description": "Platform administrator" },
+      { "name": "auditor", "description": "Audit log reviewer" }
+    ]
+  },
+  "clients": [
+    {
+      "_comment": "Sample client used by the reference service to obtain dev tokens.",
+      "clientId": "guva-reference",
+      "name": "GUVA Reference Service (local)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "reference-dev-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["verify:citizen", "audit:read"]
+    }
+  ]
+}

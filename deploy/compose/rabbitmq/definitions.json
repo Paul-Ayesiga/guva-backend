@@ -1,0 +1,76 @@
+{
+  "_comment": "Local-dev RabbitMQ topology. Webhook delivery queue per §12.5 of the event-driven messaging chapter; dead-letter exchange wired up by default so retry semantics can be exercised without manual setup.",
+  "rabbit_version": "3.13.0",
+  "users": [
+    {
+      "name": "guva",
+      "password": "guva",
+      "tags": "administrator"
+    }
+  ],
+  "vhosts": [
+    { "name": "/" }
+  ],
+  "permissions": [
+    {
+      "user": "guva",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "guva.webhooks",
+      "vhost": "/",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false
+    },
+    {
+      "name": "guva.webhooks.dlx",
+      "vhost": "/",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false
+    }
+  ],
+  "queues": [
+    {
+      "name": "webhooks.delivery",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "guva.webhooks.dlx",
+        "x-dead-letter-routing-key": "dead"
+      }
+    },
+    {
+      "name": "webhooks.delivery.dead",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": [
+    {
+      "source": "guva.webhooks",
+      "vhost": "/",
+      "destination": "webhooks.delivery",
+      "destination_type": "queue",
+      "routing_key": "deliver",
+      "arguments": {}
+    },
+    {
+      "source": "guva.webhooks.dlx",
+      "vhost": "/",
+      "destination": "webhooks.delivery.dead",
+      "destination_type": "queue",
+      "routing_key": "dead",
+      "arguments": {}
+    }
+  ]
+}

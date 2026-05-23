@@ -1,0 +1,52 @@
+# =============================================================================
+# Kong declarative configuration (DB-less mode) — §7.2.1, §19.6.
+# Starts with a single upstream route to the reference service. As services
+# are added, register them here through pull requests; CI validates the file
+# with `kong config parse`.
+# =============================================================================
+
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: reference
+    url: http://host.docker.internal:7070
+    retries: 3
+    connect_timeout: 5000
+    read_timeout: 30000
+    write_timeout: 30000
+    tags: [local, reference]
+    routes:
+      - name: reference-public
+        paths:
+          - /v1/reference
+        strip_path: true
+        methods: [GET, POST]
+        tags: [local, reference]
+
+plugins:
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-Id
+      generator: uuid
+      echo_downstream: true
+
+  - name: rate-limiting
+    config:
+      minute: 600
+      policy: local
+      hide_client_headers: false
+
+  - name: opentelemetry
+    config:
+      endpoint: http://otel-collector:4318/v1/traces
+      headers:
+        x-source: kong
+
+  - name: prometheus
+    config:
+      per_consumer: true
+      status_code_metrics: true
+      latency_metrics: true
+      bandwidth_metrics: true
+      upstream_health_metrics: true

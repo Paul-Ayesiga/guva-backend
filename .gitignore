@@ -1,0 +1,55 @@
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+secrets/
+
+# Go build artifacts
+bin/
+dist/
+*.test
+*.out
+*.exe
+coverage.txt
+coverage.html
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+.DS_Store
+
+# Docker volumes / overrides
+docker-compose.override.yml
+.compose-data/
+
+# Logs
+*.log
+logs/
+
+# Generated artifacts
+*_gen.go
+*.pb.go
+mocks/
+
+# Node (for tooling repos under services/, where applicable)
+node_modules/
+.npm/
+.yarn/
+.pnp.*
+
+# Python (for analytics utilities)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Tooling caches
+.cache/
+.tmp/
+tmp/

@@ -1,0 +1,60 @@
+openapi: 3.1.0
+info:
+  title: GUVA Reference Service
+  version: 0.1.0
+  description: |
+    Reference service used to validate the local development stack end to end.
+    Not a production endpoint. Every production service in the monorepo follows
+    the same shape: OpenAPI spec under `api/openapi.yaml`, health on /healthz,
+    readiness on /readyz, metrics on /metrics, business endpoints under /v1/*.
+servers:
+  - url: http://localhost:7070
+    description: Direct (bypasses Kong)
+  - url: http://localhost:8000/v1/reference
+    description: Via Kong gateway
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: alive }
+  /readyz:
+    get:
+      summary: Readiness probe
+      responses:
+        "200": { description: Ready }
+        "503": { description: Not ready }
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text exposition
+          content:
+            text/plain: {}
+  /v1/ping:
+    get:
+      summary: Echo endpoint
+      parameters:
+        - in: header
+          name: X-Correlation-Id
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Echo response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service:     { type: string }
+                  environment: { type: string }
+                  timestamp:   { type: string, format: date-time }

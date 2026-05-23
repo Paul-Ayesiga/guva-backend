@@ -1,0 +1,63 @@
+# Lint configuration shared by every service in the monorepo.
+# Run via `make lint`.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  go: "1.22"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - gosec
+    - misspell
+    - revive
+    - bodyclose
+    - errorlint
+    - nilerr
+    - noctx
+    - unconvert
+    - unparam
+    - wastedassign
+    - whitespace
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: var-naming
+        - name: package-comments
+          disabled: true
+        - name: unused-parameter
+          disabled: true
+    gosec:
+      excludes:
+        - G104   # Audited per-call with errcheck
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment   # noisy; revisit when profiling shows it matters
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+          - unparam
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/guva-ug

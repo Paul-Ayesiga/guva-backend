@@ -1,0 +1,22 @@
+# Copy to `docker-compose.override.yml` to layer local-only changes on top
+# of docker-compose.yml. The override file is gitignored so you can adjust
+# port mappings, mount your own configs, or attach a profiler without
+# touching the canonical compose file.
+#
+# Usage:
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#   make up
+
+services:
+
+  # Example: expose Postgres on a non-default port to avoid clashing with a
+  # locally installed Postgres on 5432.
+  # postgres:
+  #   ports:
+  #     - "55432:5432"
+
+  # Example: mount your service's local build output for fast iteration.
+  # reference:
+  #   build: ./services/reference
+  #   volumes:
+  #     - ./services/reference/bin:/app/bin

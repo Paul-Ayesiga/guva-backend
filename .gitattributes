@@ -1,0 +1,19 @@
+* text=auto eol=lf
+
+*.go      text diff=golang
+*.md      text diff=markdown
+*.sh      text eol=lf
+*.bash    text eol=lf
+Dockerfile text
+
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.pdf     binary
+
+# Generated files — hide from diff noise
+*_gen.go      linguist-generated=true
+*.pb.go       linguist-generated=true
+go.sum        linguist-generated=true
