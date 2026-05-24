@@ -208,8 +208,10 @@ A natural follow-up (Phase 2.5) is adding **Prometheus alerts** that page when a
 | 2.1 | Drop pinned keys; APISIX uses OIDC discovery | ✅ |
 | 2.2 | Caddy + `*.localhost` TLS; production-shaped issuer URLs in local | ✅ |
 | 2.3 | Operational runbook + environment migration guide + rollback strategy | ✅ |
-| **2.4** | **Observability (auth metrics, JWKS refresh dashboards, 401/403 panels)** | ✅ **landed in this commit** |
-| 2.5 | Security hardening checklist; stricter rate limits on auth-sensitive endpoints | ⏳ next |
+| 2.4 | Observability (auth metrics, JWKS refresh dashboards, 401/403 panels) | ✅ |
+| **2.5** | **Security hardening checklist; stricter rate limits on auth-sensitive endpoints** | ✅ **landed in this commit** |
+
+**Phase 2 is complete.** The platform now has standards-compliant OIDC authentication, no pinned key material, environment-shaped URLs in local, auth-specific observability, and a documented security posture. See [SECURITY-CHECKLIST.md](./SECURITY-CHECKLIST.md) for the canonical hardening list.
 
 ---
 
