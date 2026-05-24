@@ -207,15 +207,26 @@ make redis-cli
 
 ### Kafka
 
-The broker (Apache `kafka-native` 4.3) listens on `localhost:9094` from your host. The native (GraalVM-compiled) image is a single binary — it intentionally **does not ship the JVM shell scripts** (no `kafka-console-producer.sh`, `kafka-topics.sh`, etc.), so you can't `docker compose exec` your way to a CLI. Use one of:
+The broker (Apache `kafka-native` 4.3) listens on `localhost:9094` from your host. The native (GraalVM-compiled) image is a single binary — it intentionally **does not ship the JVM shell scripts** (no `kafka-console-producer.sh`, `kafka-topics.sh`, etc.), so you can't `docker compose exec` your way to a CLI.
+
+#### Default: `kcat` from your host
+
+`kcat` (formerly `kafkacat`) is a ~5 MB native binary that does produce, consume, and metadata against any broker. Install once, use everywhere — no Docker round-trips.
 
 ```bash
-# Option A: kcat from your host (recommended — install once, use everywhere)
-brew install kcat
-echo 'hello kafka' | kcat -P -b localhost:9094 -t demo
-kcat -C -b localhost:9094 -t demo -o beginning -e
+brew install kcat                                       # macOS
+# apt install kcat                                      # Debian/Ubuntu
 
-# Option B: one-off non-native Apache image, attached to the guva network
+echo 'hello kafka' | kcat -P -b localhost:9094 -t demo  # produce
+kcat -C -b localhost:9094 -t demo -o beginning -e       # consume + exit
+kcat -L -b localhost:9094                               # cluster metadata
+```
+
+#### Fallback: the Apache JVM image as a one-off sidecar
+
+Only reach for this when you specifically need an official `kafka-*.sh` script (topic admin with non-trivial configs, ACL ops, consumer-group inspection, etc.). **First run pulls ~500 MB** — Docker downloads `apache/kafka:4.3.0` (the JVM image, *different* from the `kafka-native` one already in your stack); subsequent runs are cached.
+
+```bash
 docker run --rm -i --network guva apache/kafka:4.3.0 \
   /opt/kafka/bin/kafka-console-producer.sh \
     --bootstrap-server kafka:9092 --topic demo <<< 'hello kafka'
