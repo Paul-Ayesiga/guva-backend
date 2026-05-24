@@ -78,32 +78,56 @@ The reference service proves the stack works end to end. It is not a real servic
 make run-reference
 ```
 
-In a third terminal, exercise it both directly and through the gateway:
+In a third terminal, exercise it. `/ping` requires the `verify:citizen` scope — the gateway rejects unauthenticated calls, and the service double-checks scope as defence in depth.
 
 ```bash
-# Direct (services serve flat routes; the gateway owns public versioning)
-curl -s localhost:7070/ping | jq
+# Easiest path: fetch a token and call it in one go
+make ping
 
-# Backwards-compat alias kept on the service for older callers
-curl -s localhost:7070/v1/ping | jq
+# Or do it manually:
+TOKEN=$(make token)                                               # fetch a JWT
+curl -sH "Authorization: Bearer $TOKEN" \
+  localhost:8000/v1/reference/ping | jq                           # through Kong
+curl -sH "Authorization: Bearer $TOKEN" \
+  localhost:7070/ping | jq                                        # direct
+curl -sH "Authorization: Bearer $TOKEN" \
+  localhost:7070/v1/ping | jq                                     # backcompat alias
 
-# Through Kong — public namespace /v1/<service>/<route>; Kong strips
-# the /v1/reference prefix before forwarding to the service.
-curl -s localhost:8000/v1/reference/ping | jq
+# Negative checks (both expected to 401):
+curl -s -o /dev/null -w "%{http_code}\n" localhost:8000/v1/reference/ping
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer not.a.real.token" \
+  localhost:8000/v1/reference/ping
 
-# Prometheus metrics
+# Unauthenticated probes (no scope needed):
 curl -s localhost:7070/metrics | head
-
-# Health probes
 curl -s localhost:7070/healthz && echo
 curl -s localhost:7070/readyz  && echo
+```
+
+A successful `make ping` response includes a `caller` block extracted from the JWT — the gateway has verified the signature, the service has parsed the claims and confirmed `verify:citizen` is present:
+
+```json
+{
+  "service": "reference",
+  "environment": "local",
+  "timestamp": "2026-05-24T01:36:02.93775Z",
+  "caller": {
+    "client": "guva-reference",
+    "subject": "e60cf536-1bf0-4292-80d9-2fad59edf76e",
+    "scopes": ["verify:citizen", "audit:read"],
+    "issuer": "http://localhost:8080/realms/guva"
+  }
+}
 ```
 
 Then open:
 
 - **Jaeger** — <http://localhost:16686>. Select service `reference` and look for the `GET /ping` span.
 - **Grafana** — <http://localhost:3000> (admin/admin). The Prometheus datasource is provisioned; query `up{job="reference"}` to confirm scrape success.
-- **Kong admin GUI** — <http://localhost:8002>. The `reference` service and route are loaded from declarative config.
+- **Kong admin GUI** — <http://localhost:8002>. The `reference` service, route, JWT consumer, and plugins are loaded from declarative config.
+
+> **Why the JWT plugin and not OpenID Connect?** Kong's `openid-connect` plugin is paid-tier only and refuses to load in the Enterprise image's free mode. The OSS `jwt` plugin validates signatures against a per-consumer RSA public key (extracted from Keycloak's `/realms/guva` endpoint and pinned in `kong.yml`). Trade-off: Keycloak's realm key rotation is not automatic — when it happens, fetch the new key with `curl -s http://localhost:8080/realms/guva | jq -r .public_key` and replace the `rsa_public_key` block in `deploy/compose/kong/kong.yml`.
 
 If all four checks pass, your stack is healthy. Stop the reference service with Ctrl-C.
 

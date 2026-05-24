@@ -77,6 +77,22 @@ logs-%: ## Tail logs for a single service, e.g. `make logs-kafka`.
 	@$(COMPOSE) logs -f --tail=200 $*
 
 # ---- Database -------------------------------------------------------------
+.PHONY: token
+token: ## Print an OAuth client-credentials access token for guva-reference.
+	@curl -fsS -X POST http://localhost:8080/realms/guva/protocol/openid-connect/token \
+	  -H 'Content-Type: application/x-www-form-urlencoded' \
+	  -d 'grant_type=client_credentials' \
+	  -d 'client_id=guva-reference' \
+	  -d 'client_secret=reference-dev-secret' \
+	  | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])"
+
+.PHONY: ping
+ping: ## Call /v1/reference/ping through Kong with a fresh token.
+	@TOKEN=$$($(MAKE) -s token) && \
+	 curl -fsS -H "Authorization: Bearer $$TOKEN" \
+	   http://localhost:8000/v1/reference/ping \
+	   | python3 -m json.tool
+
 .PHONY: psql
 psql: ## Open psql on the postgres container.
 	@$(COMPOSE) exec -it postgres psql -U $${POSTGRES_USER:-guva} -d $${POSTGRES_DB:-guva}

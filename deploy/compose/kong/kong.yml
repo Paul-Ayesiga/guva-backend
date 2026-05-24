@@ -24,6 +24,33 @@ services:
         methods: [GET, POST]
         tags: [local, reference]
 
+# JWT credentials are pinned per consumer.  The `key` MUST equal the `iss`
+# claim of the token — Keycloak issues iss=http://localhost:8080/realms/guva
+# (the URL the client used to fetch the token).  rsa_public_key comes from
+#   curl -s http://localhost:8080/realms/guva | jq -r .public_key
+# and is wrapped with PEM markers below.
+#
+# Caveat: Keycloak rotates realm keys periodically.  When that happens, the
+# JWT plugin starts rejecting fresh tokens — re-run the curl above and
+# replace the rsa_public_key block.  Production deployments use the Kong
+# Enterprise openid-connect plugin (paid licence) which fetches JWKS live.
+consumers:
+  - username: guva-reference
+    tags: [local, reference]
+    jwt_secrets:
+      - key: http://localhost:8080/realms/guva
+        algorithm: RS256
+        rsa_public_key: |
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArUuTPnKbtf5dhAoH5kXa
+          3RZ4e6l69uJ5Zr5XwPF27RQ42/heM+LsNroeo8xhZjBRVOp6JRKIhqY13TC8msBs
+          HgO4uuUi864piJEd1z6Fm8GkjVVwTItWVTGPn3icF/B8Y/tNEqyrQ4fb8zGYQUIV
+          nWyY4rhaa4R6lpNOFst/GB/Txi8MidUQZXiizggSM+IHFYQGkx0rXz4OJlcEOpQy
+          b9GDNE8Lnbz8ZOxSSxRNjxx0faxjdx1X/82c+DFOEeAGZr9rG7ZOI6MtqUqTe44O
+          qa9NkIn25fWy4iawJc28PJcklSbrLZ1gaRoXCxmVFfFX5f/vZbjnXaxkSI1tkIfp
+          4wIDAQAB
+          -----END PUBLIC KEY-----
+
 plugins:
   - name: correlation-id
     config:
@@ -50,3 +77,20 @@ plugins:
       latency_metrics: true
       bandwidth_metrics: true
       upstream_health_metrics: true
+
+  # JWT bearer-token validation on the reference route.
+  #
+  # The plugin validates the token signature against the RSA public key
+  # bound to the consumer whose JWT secret's `key` matches the token's
+  # `iss` claim (see consumers block above).  `exp` is also checked.
+  #
+  # Scope checking is NOT done here — the OSS `jwt` plugin doesn't support
+  # it.  The reference service receives the raw Authorization header and
+  # enforces scope itself (defence in depth + service-side context).
+  - name: jwt
+    route: reference-public
+    config:
+      claims_to_verify:
+        - exp
+      key_claim_name: iss
+      run_on_preflight: false

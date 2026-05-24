@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/guva-ug/guva-backend/services/reference/internal/auth"
 	"github.com/guva-ug/guva-backend/services/reference/internal/config"
 	"github.com/guva-ug/guva-backend/services/reference/internal/health"
 
@@ -36,7 +37,11 @@ func New(cfg config.Config, logger *slog.Logger, probes *health.Probes) *http.Se
 	mux.Handle("/healthz", liveness())
 	mux.Handle("/readyz", readiness(probes))
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-	ping := otelhttp.NewHandler(pingHandler(cfg, logger), "GET /ping")
+	// /ping requires verify:citizen scope. The gateway already validates
+	// the JWT signature; this check is defence in depth + a way to fail
+	// closed if the service is ever reached without going through Kong.
+	ping := auth.RequireScope("verify:citizen",
+		otelhttp.NewHandler(pingHandler(cfg, logger), "GET /ping"))
 	mux.Handle("/ping", ping)
 	mux.Handle("/v1/ping", ping)
 
@@ -70,13 +75,23 @@ func readiness(p *health.Probes) http.Handler {
 
 func pingHandler(cfg config.Config, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, _ := auth.FromContext(r.Context())
 		logger.InfoContext(r.Context(), "ping",
-			"correlation_id", r.Header.Get("X-Correlation-Id"))
+			"correlation_id", r.Header.Get("X-Correlation-Id"),
+			"caller_subject", claims.Subject,
+			"caller_client", claims.ClientID,
+		)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"service":     cfg.ServiceName,
 			"environment": cfg.Environment,
 			"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
+			"caller": map[string]any{
+				"client":  claims.ClientID,
+				"subject": claims.Subject,
+				"scopes":  claims.Scopes(),
+				"issuer":  claims.Issuer,
+			},
 		})
 	})
 }
