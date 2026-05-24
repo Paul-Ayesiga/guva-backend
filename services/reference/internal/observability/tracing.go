@@ -43,7 +43,7 @@ func InitTracing(ctx context.Context, cfg config.Config) (func(context.Context) 
 		resource.WithAttributes(
 			semconv.ServiceName(cfg.ServiceName),
 			semconv.ServiceNamespace("guva"),
-			semconv.DeploymentEnvironmentName(cfg.Environment),
+			semconv.DeploymentEnvironment(cfg.Environment),
 		),
 	)
 	if err != nil {

@@ -56,6 +56,7 @@ service:
       receivers: [otlp]
       processors: [memory_limiter, resource, batch]
       exporters: [prometheus, debug]
-  telemetry:
-    metrics:
-      address: 0.0.0.0:8888
+  # Collector self-metrics: 0.123+ replaced the legacy `metrics.address`
+  # form with a readers list. We don't scrape collector-internal metrics
+  # locally — app metrics go via the prometheus exporter on :8889 — so
+  # leaving telemetry.metrics unset is fine.

@@ -81,10 +81,14 @@ make run-reference
 In a third terminal, exercise it both directly and through the gateway:
 
 ```bash
-# Direct
+# Direct (services serve flat routes; the gateway owns public versioning)
+curl -s localhost:7070/ping | jq
+
+# Backwards-compat alias kept on the service for older callers
 curl -s localhost:7070/v1/ping | jq
 
-# Through Kong (note the /v1/reference prefix is stripped by the gateway)
+# Through Kong — public namespace /v1/<service>/<route>; Kong strips
+# the /v1/reference prefix before forwarding to the service.
 curl -s localhost:8000/v1/reference/ping | jq
 
 # Prometheus metrics
@@ -97,7 +101,7 @@ curl -s localhost:7070/readyz  && echo
 
 Then open:
 
-- **Jaeger** — <http://localhost:16686>. Select service `reference` and look for the `GET /v1/ping` span.
+- **Jaeger** — <http://localhost:16686>. Select service `reference` and look for the `GET /ping` span.
 - **Grafana** — <http://localhost:3000> (admin/admin). The Prometheus datasource is provisioned; query `up{job="reference"}` to confirm scrape success.
 - **Kong admin GUI** — <http://localhost:8002>. The `reference` service and route are loaded from declarative config.
 
@@ -150,7 +154,7 @@ Convention: every migration has both an `up` and a `down`. Reviewers reject migr
 
 Conventional Commits, present-tense, short subject:
 
-```
+```text
 feat(reference): expose /v1/ping echo endpoint
 fix(consent): treat expired consents as denied at the gateway
 chore(deps): bump otelhttp to v0.55.0
@@ -203,17 +207,25 @@ make redis-cli
 
 ### Kafka
 
-The broker listens on `localhost:9094` from your host. Quick produce / consume using the bitnami CLI inside the container:
+The broker (Apache `kafka-native` 4.3) listens on `localhost:9094` from your host. The native (GraalVM-compiled) image is a single binary — it intentionally **does not ship the JVM shell scripts** (no `kafka-console-producer.sh`, `kafka-topics.sh`, etc.), so you can't `docker compose exec` your way to a CLI. Use one of:
 
 ```bash
-# Produce
-docker compose exec -T kafka /opt/bitnami/kafka/bin/kafka-console-producer.sh \
-  --bootstrap-server kafka:9092 --topic demo <<< 'hello kafka'
+# Option A: kcat from your host (recommended — install once, use everywhere)
+brew install kcat
+echo 'hello kafka' | kcat -P -b localhost:9094 -t demo
+kcat -C -b localhost:9094 -t demo -o beginning -e
 
-# Consume
-docker compose exec kafka /opt/bitnami/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server kafka:9092 --topic demo --from-beginning --max-messages 1
+# Option B: one-off non-native Apache image, attached to the guva network
+docker run --rm -i --network guva apache/kafka:4.3.0 \
+  /opt/kafka/bin/kafka-console-producer.sh \
+    --bootstrap-server kafka:9092 --topic demo <<< 'hello kafka'
+
+docker run --rm --network guva apache/kafka:4.3.0 \
+  /opt/kafka/bin/kafka-console-consumer.sh \
+    --bootstrap-server kafka:9092 --topic demo --from-beginning --max-messages 1
 ```
+
+> **Local Kafka data is ephemeral.** The Docker named volume that would back `/var/lib/kafka/data` clashes with the image's non-root uid 1000 on macOS, so the compose file omits the mount. Data survives container restarts but not container removal (`make down` is safe; `make reset` wipes). Production Kafka of course persists — that's handled by the Strimzi-managed PVCs in the infra repo.
 
 ### RabbitMQ
 
@@ -298,6 +310,14 @@ tools/scripts/db-migrate.sh <service> force <previous_version>
 ```
 
 Only force when you know the schema state.
+
+### Postgres container is `unhealthy` after `make up`
+
+If `make logs-postgres` shows `Error: in 18+, these Docker images are configured to store database data in a format which is compatible with "pg_ctlcluster"`, the volume mount is pointing at the wrong path. Postgres 18+ stores data under a major-version subdirectory (`/var/lib/postgresql/18/docker/`), so the mount in `docker-compose.yml` must be at the **parent** `/var/lib/postgresql`, not `/var/lib/postgresql/data` (which was correct on Postgres ≤ 16). This is a one-line fix in the compose file — see the comment block on the `postgres` service.
+
+### Reference service returns 404 on `/ping` (or 200 on `/v1/ping` only)
+
+You're running a stale binary. `go run` does not auto-reload on source edits — Ctrl-C the `make run-reference` terminal and re-run it to pick up route changes.
 
 ---
 

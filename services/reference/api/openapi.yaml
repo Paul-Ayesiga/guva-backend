@@ -39,9 +39,12 @@ paths:
           description: Prometheus text exposition
           content:
             text/plain: {}
-  /v1/ping:
+  /ping:
     get:
       summary: Echo endpoint
+      description: |
+        Served at /ping on the service itself; reachable through the gateway
+        at /v1/reference/ping (Kong strips the /v1/reference prefix).
       parameters:
         - in: header
           name: X-Correlation-Id

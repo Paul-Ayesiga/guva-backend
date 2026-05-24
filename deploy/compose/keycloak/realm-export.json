@@ -1,5 +1,4 @@
 {
-  "_comment": "Minimal GUVA realm for local development. Mirrors the role and scope catalogue described in WS2-02 of the task list. NOT for production — production Keycloak realms are exported from staging via the admin CLI and version-controlled in the infra repo.",
   "realm": "guva",
   "enabled": true,
   "displayName": "GUVA (Local Development)",
@@ -40,7 +39,6 @@
   },
   "clients": [
     {
-      "_comment": "Sample client used by the reference service to obtain dev tokens.",
       "clientId": "guva-reference",
       "name": "GUVA Reference Service (local)",
       "enabled": true,

@@ -28,7 +28,6 @@ networks:
 volumes:
   postgres-data:
   redis-data:
-  kafka-data:
   rabbitmq-data:
   keycloak-data:
   minio-data:
@@ -55,8 +54,12 @@ services:
       POSTGRES_INITDB_ARGS: "--data-checksums"
     ports:
       - "5432:5432"
+    # Postgres 18+ stores data under a major-version subdir
+    # (e.g. /var/lib/postgresql/18/docker/), so the mount must be at the
+    # PARENT path — not /var/lib/postgresql/data as it was on Postgres ≤16.
+    # See https://github.com/docker-library/postgres/pull/1259
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
       - ./deploy/compose/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     command:
       - postgres
@@ -123,15 +126,18 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: "3"
       KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
-      # Data directory inside the container
-      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      # Data directory — the apache/kafka-native image doesn't pre-create
+      # /var/lib/kafka, only /tmp is writable by appuser at runtime.
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
     ports:
       - "9094:9094"
-    volumes:
-      - kafka-data:/var/lib/kafka/data
-    # The native image strips out the JVM shell scripts (no kafka-broker-api-
-    # versions.sh), so we use a TCP-probe healthcheck via the bash builtin
-    # /dev/tcp — present in bash 4+, which the image ships with.
+    # NOTE: no volume mount on /var/lib/kafka/data. The apache/kafka-native
+    # image runs as uid 1000 (appuser); a Docker named volume mounts owned
+    # by root, which prevents Kafka from writing its meta.properties. For
+    # local dev we accept ephemeral storage (per the file header). To get
+    # persistence, switch to a bind-mount with the correct ownership.
+    # The TCP-probe healthcheck below uses the bash builtin /dev/tcp —
+    # the native image strips the JVM shell scripts.
     healthcheck:
       <<: *hc-defaults
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9092' 2>/dev/null"]
@@ -140,22 +146,20 @@ services:
   # ---------------------------------------------------------------------------
   # Apicurio Registry — event schema registry (§19.5).
   #
-  # v3 consolidates onto a single image; the in-memory backend is selected by
-  # APICURIO_STORAGE_KIND=mem. The REST surface moves to /apis/registry/v3/*
-  # and the Quarkus health endpoints land at /q/health/{live,ready}.
+  # Pinned to v2.6.7.Final. The v3 line has a different env-var contract and
+  # storage-backend selection model; the in-memory bootstrap was crashing on
+  # 3.0.6 with no usable docs. Revisit v3 when its configuration surface
+  # stabilises. REST surface here is /apis/registry/v2/*.
   # ---------------------------------------------------------------------------
   apicurio:
     <<: *restart
-    image: apicurio/apicurio-registry:3.0.6
+    image: apicurio/apicurio-registry-mem:2.6.7.Final
     container_name: guva-apicurio
-    environment:
-      APICURIO_STORAGE_KIND: mem
-      QUARKUS_HTTP_PORT: "8080"
     ports:
       - "8081:8080"
     healthcheck:
       <<: *hc-defaults
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/q/health/ready"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/apis/registry/v2/system/info"]
     networks: [guva]
 
   # ---------------------------------------------------------------------------
@@ -209,9 +213,14 @@ services:
     volumes:
       - keycloak-data:/opt/keycloak/data
       - ./deploy/compose/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    # Keycloak 25+ exposes /health/* on the management interface (port 9000
+    # by default). The image has neither curl nor wget, and Quarkus rejects
+    # hand-crafted HTTP requests over /dev/tcp (strict CRLF). Probing that
+    # the management port accepts TCP is sufficient for local dev — the
+    # port only opens after the server reports itself ready.
     healthcheck:
       <<: *hc-defaults
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\nHost: localhost\\n\\n' >&3 && cat <&3 | head -1 | grep -q '200 OK'"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9000' 2>/dev/null"]
       start_period: 60s
     networks: [guva]
 
@@ -233,9 +242,12 @@ services:
       - "8200:8200"
     volumes:
       - ./deploy/compose/vault/policies:/vault/policies:ro
+    # Use the vault CLI for healthcheck — the image's busybox wget
+    # mishandles the /v1/sys/health response codes (200/429/473 are all
+    # "healthy" for different vault states; wget treats non-200 as error).
     healthcheck:
       <<: *hc-defaults
-      test: ["CMD", "wget", "-qO-", "http://localhost:8200/v1/sys/health"]
+      test: ["CMD", "vault", "status"]
     networks: [guva]
 
   # ---------------------------------------------------------------------------
@@ -304,9 +316,8 @@ services:
       - "4318:4318"   # OTLP HTTP
       - "8888:8888"   # collector's own metrics
       - "8889:8889"   # prometheus exporter (scraped by prometheus)
-    healthcheck:
-      <<: *hc-defaults
-      test: ["CMD", "wget", "-qO-", "http://localhost:13133/"]
+    # No healthcheck — the distroless contrib image has no wget/curl/nc
+    # and no self-status subcommand. Liveness in local dev is sufficient.
     networks: [guva]
 
   # ---------------------------------------------------------------------------

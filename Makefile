@@ -134,22 +134,21 @@ run-%: ## Run a service in the foreground, e.g. `make run-reference`.
 # ---- Convenience ----------------------------------------------------------
 .PHONY: urls
 urls: ## Print local service URLs.
-	@cat <<-'EOF'
-	Kong proxy        http://localhost:8000
-	Kong admin        http://localhost:8001
-	Keycloak          http://localhost:8080  (admin/admin)
-	Vault             http://localhost:8200  (token: dev-root-token)
-	RabbitMQ          http://localhost:15672 (guva/guva)
-	MinIO console     http://localhost:9001  (guva/guvaguva)
-	Apicurio          http://localhost:8081
-	Prometheus        http://localhost:9090
-	Grafana           http://localhost:3000  (admin/admin)
-	Jaeger            http://localhost:16686
-	Postgres          postgres://guva:guva@localhost:5432/guva
-	Redis             redis://localhost:6379
-	Kafka             localhost:9094
-	Reference svc     http://localhost:7070  (run: make run-reference)
-	EOF
+	@printf '%s\n' \
+	  "Kong proxy        http://localhost:8000" \
+	  "Kong admin        http://localhost:8001" \
+	  "Keycloak          http://localhost:8080  (admin/admin)" \
+	  "Vault             http://localhost:8200  (token: dev-root-token)" \
+	  "RabbitMQ          http://localhost:15672 (guva/guva)" \
+	  "MinIO console     http://localhost:9001  (guva/guvaguva)" \
+	  "Apicurio          http://localhost:8081" \
+	  "Prometheus        http://localhost:9090" \
+	  "Grafana           http://localhost:3000  (admin/admin)" \
+	  "Jaeger            http://localhost:16686" \
+	  "Postgres          postgres://guva:guva@localhost:5432/guva" \
+	  "Redis             redis://localhost:6379" \
+	  "Kafka             localhost:9094" \
+	  "Reference svc     http://localhost:7070  (run: make run-reference)"
 
 .PHONY: clean
 clean: ## Remove build artifacts.

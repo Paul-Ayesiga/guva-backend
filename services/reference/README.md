@@ -20,10 +20,10 @@ cd services/reference && go run ./cmd/server
 Then exercise it:
 
 ```bash
-# Directly
-curl -s localhost:7070/v1/ping | jq
+# Directly (flat route on the service)
+curl -s localhost:7070/ping | jq
 
-# Through Kong
+# Through Kong (gateway adds the /v1/reference public prefix)
 curl -s localhost:8000/v1/reference/ping | jq
 
 # Metrics
@@ -38,7 +38,7 @@ Traces appear in Jaeger at <http://localhost:16686>. Metrics in Prometheus at <h
 
 ## Layout
 
-```
+```text
 services/reference/
 ├── api/openapi.yaml              Single source of truth for the API
 ├── cmd/server/main.go            Entry point — wires config, logger, server

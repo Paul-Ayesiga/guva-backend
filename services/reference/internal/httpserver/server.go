@@ -1,10 +1,12 @@
 // Package httpserver builds the HTTP server for the reference service.
 //
 // Routes:
-//   GET  /healthz   liveness probe
-//   GET  /readyz    readiness probe
-//   GET  /metrics   Prometheus metrics
-//   GET  /v1/ping   sample endpoint used for end-to-end verification
+//
+//	GET  /healthz   liveness probe
+//	GET  /readyz    readiness probe
+//	GET  /metrics   Prometheus metrics
+//	GET  /ping      canonical sample endpoint used for end-to-end verification
+//	GET  /v1/ping   legacy alias retained for backwards compatibility
 package httpserver
 
 import (
@@ -34,7 +36,9 @@ func New(cfg config.Config, logger *slog.Logger, probes *health.Probes) *http.Se
 	mux.Handle("/healthz", liveness())
 	mux.Handle("/readyz", readiness(probes))
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-	mux.Handle("/v1/ping", otelhttp.NewHandler(pingHandler(cfg, logger), "GET /v1/ping"))
+	ping := otelhttp.NewHandler(pingHandler(cfg, logger), "GET /ping")
+	mux.Handle("/ping", ping)
+	mux.Handle("/v1/ping", ping)
 
 	return &http.Server{
 		Addr:              cfg.HTTPAddr,
