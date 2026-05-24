@@ -116,7 +116,7 @@ func main() {
 	probes := health.New()
 	probes.MarkReady()
 
-	srv := server.New(cfg, logger, probes, st, kcAdmin)
+	srv := server.New(cfg, logger, probes, st, kcAdmin, vault)
 
 	go func() {
 		logger.Info("identity service listening", "addr", cfg.HTTPAddr)

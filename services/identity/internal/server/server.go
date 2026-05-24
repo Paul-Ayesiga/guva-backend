@@ -25,6 +25,7 @@ import (
 	"github.com/guva-ug/guva-backend/pkg/platform/health"
 	"github.com/guva-ug/guva-backend/pkg/platform/httpserver"
 	"github.com/guva-ug/guva-backend/pkg/platform/problem"
+	"github.com/guva-ug/guva-backend/pkg/secrets"
 	"github.com/guva-ug/guva-backend/services/identity/internal/config"
 	"github.com/guva-ug/guva-backend/services/identity/internal/keycloakadmin"
 	"github.com/guva-ug/guva-backend/services/identity/internal/store"
@@ -148,7 +149,7 @@ func deriveCategory(name string) string {
 }
 
 // New returns the identity service's *http.Server.
-func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *store.Store, kc *keycloakadmin.Client) *http.Server {
+func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *store.Store, kc *keycloakadmin.Client, vault *secrets.Client) *http.Server {
 	mux := http.NewServeMux()
 
 	cache := newScopeCache(kc, logger)
@@ -169,7 +170,7 @@ func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *stor
 	// the admin:consumers scope and probably a separate platform-admin
 	// client with stricter rate limits.
 	consumersPost := auth.RequireScope("audit:read",
-		otelhttp.NewHandler(createConsumerHandler(logger, st, kc), "POST /consumers"))
+		otelhttp.NewHandler(createConsumerHandler(logger, st, kc, vault), "POST /consumers"))
 	mux.Handle("POST /consumers", consumersPost)
 
 	return httpserver.New(httpserver.Config{Addr: cfg.HTTPAddr}, probes, mux)
@@ -200,16 +201,18 @@ type createConsumerRequest struct {
 }
 
 // createConsumerResponse extends the persisted record with the one-time
-// secret returned by Keycloak. The secret is omitted from every other
-// response (GET /consumers/{id}, list endpoints when they exist) —
-// callers MUST capture it from this 201 body.
+// secret returned by Keycloak and the Vault path where it's been
+// stashed for operational recovery. The secret is omitted from every
+// other response (GET /consumers/{id}, list endpoints when they exist);
+// the Vault path is the recoverable backup if the caller drops it.
 type createConsumerResponse struct {
 	store.ConsumerRegistration
 	GeneratedClientSecret string `json:"generated_client_secret"`
+	SecretVaultPath       string `json:"secret_vault_path,omitempty"`
 	SecretDisclosureNote  string `json:"_note"`
 }
 
-func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadmin.Client) http.Handler {
+func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadmin.Client, vault *secrets.Client) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req createConsumerRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -292,17 +295,46 @@ func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadm
 			return
 		}
 
+		// Stash the secret in Vault for operational recovery if the
+		// caller drops the response. This is best-effort: if the write
+		// fails, we still succeed the request — the secret is in the
+		// response body and that's the authoritative one-time disclosure.
+		// The Vault path is identity-scoped (services/identity/...) so
+		// only the identity service's own policy can read it.
+		vaultPath := "services/identity/consumers/" + kcResult.ClientID
+		vaultStashed := false
+		if vault != nil {
+			vaultCtx, vaultCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			err := vault.Put(vaultCtx, vaultPath, map[string]string{
+				"client_secret": kcResult.Secret,
+				"consumer_id":   reg.ID,
+				"created_at":    reg.CreatedAt.Format(time.RFC3339Nano),
+			})
+			vaultCancel()
+			if err != nil {
+				logger.WarnContext(r.Context(), "vault stash failed; response body remains the only copy",
+					"vault_path", vaultPath, "error", err)
+			} else {
+				vaultStashed = true
+			}
+		}
+
 		logger.InfoContext(r.Context(), "consumer.created",
 			"correlation_id", r.Header.Get("X-Correlation-Id"),
 			"consumer_id", reg.ID,
 			"keycloak_internal_id", kcResult.InternalID,
 			"agency", reg.AgencyName,
+			"vault_stashed", vaultStashed,
 		)
 
 		resp := createConsumerResponse{
 			ConsumerRegistration:  reg,
 			GeneratedClientSecret: kcResult.Secret,
 			SecretDisclosureNote:  "This secret is shown only here. Store it securely; subsequent GETs will not include it.",
+		}
+		if vaultStashed {
+			resp.SecretVaultPath = vaultPath
+			resp.SecretDisclosureNote += " A backup copy is in Vault at " + vaultPath + " (identity-scoped policy)."
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Location", "/consumers/"+reg.ID)

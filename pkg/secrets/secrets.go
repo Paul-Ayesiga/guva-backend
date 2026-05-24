@@ -147,3 +147,36 @@ func (c *Client) MustGetString(ctx context.Context, path, key string) string {
 	}
 	return v
 }
+
+// Put writes a set of key/value pairs to the KV-v2 path. KV-v2 versions
+// are created automatically; an existing path's previous version is
+// retained per the engine's max-versions setting. Use carefully — the
+// platform reserves Vault writes for operational backup paths (e.g.
+// the identity service stashing newly-created client secrets so they
+// can be recovered if the registering caller dropped the response).
+func (c *Client) Put(ctx context.Context, path string, data map[string]string) error {
+	url := fmt.Sprintf("%s/v1/%s/data/%s", c.addr, c.mount, strings.TrimLeft(path, "/"))
+	envelope := struct {
+		Data map[string]string `json:"data"`
+	}{Data: data}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Vault-Token", c.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("vault PUT %s: %w", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode/100 != 2 {
+		out, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("vault PUT %s: %s: %s", path, resp.Status, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
