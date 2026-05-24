@@ -161,9 +161,9 @@ redis-cli: ## Open redis-cli on the redis container.
 	@$(COMPOSE) exec -it redis redis-cli
 
 .PHONY: migrate
-migrate: ## Run migrations for all services (no-op until services own migrations).
+migrate: ## Run migrations for every service that has actual .sql files.
 	@for s in $(SERVICES); do \
-	  if [ -d $(SERVICES_DIR)/$$s/migrations ]; then \
+	  if ls $(SERVICES_DIR)/$$s/migrations/*.sql >/dev/null 2>&1; then \
 	    echo "==> migrate $$s"; \
 	    bash tools/scripts/db-migrate.sh $$s up; \
 	  fi; \
