@@ -1,0 +1,84 @@
+# =============================================================================
+# Prometheus alert rules — kept lightweight so they're meaningful in dev.
+# In staging/prod, Alertmanager + a real notification channel (PagerDuty,
+# Slack, email) ride on top of these same expressions.
+#
+# Conventions:
+#   - severity: "warning" for things humans should look at soon, "critical"
+#     for things that should page.
+#   - `for: 5m` to absorb transient spikes; tune per environment.
+#
+# Visible in Prometheus at http://localhost:9090/alerts and in Grafana's
+# Alerting tab. We don't run Alertmanager locally — alerts firing is
+# the signal; routing/paging is operational concern for non-dev envs.
+# =============================================================================
+
+groups:
+
+  - name: gateway-availability
+    interval: 30s
+    rules:
+
+      - alert: ApisixScrapeDown
+        expr: up{job="apisix"} == 0
+        for: 2m
+        labels: { severity: critical, component: gateway }
+        annotations:
+          summary: "APISIX scrape target down"
+          description: "Prometheus cannot scrape APISIX at apisix:9091 for 2m+. Either APISIX is down or its prometheus exporter has broken."
+          runbook: "docs/RUNBOOK-AUTH.md §8"
+
+      - alert: KeycloakScrapeDown
+        expr: up{job="keycloak"} == 0
+        for: 2m
+        labels: { severity: critical, component: identity-provider }
+        annotations:
+          summary: "Keycloak scrape target down"
+          description: "Prometheus cannot scrape Keycloak metrics for 2m+. Identity provider may be unreachable; new token issuance and JWKS refresh will fail."
+          runbook: "docs/RUNBOOK-AUTH.md §7"
+
+  - name: auth-health
+    interval: 30s
+    rules:
+
+      - alert: HighAuthFailureRate
+        expr: |
+          (
+            sum(rate(apisix_http_status{code=~"401|403"}[5m]))
+            /
+            clamp_min(sum(rate(apisix_http_status[5m])), 0.001)
+          ) > 0.25
+        for: 5m
+        labels: { severity: warning, component: auth }
+        annotations:
+          summary: "More than 25% of gateway traffic is 401/403 over 5m"
+          description: "Sustained auth-failure share above 25%. Likely causes: stale JWKS after rotation, issuer mismatch, mass credential expiry."
+          runbook: "docs/RUNBOOK-AUTH.md (any of §2, §3, §5)"
+
+      - alert: GatewayElevatedErrorRate
+        expr: |
+          (
+            sum(rate(apisix_http_status{code=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(apisix_http_status[5m])), 0.001)
+          ) > 0.05
+        for: 5m
+        labels: { severity: warning, component: gateway }
+        annotations:
+          summary: "More than 5% of gateway responses are 5xx over 5m"
+          description: "Upstream service errors or gateway-side failures. Inspect traces in Jaeger filtered to status_code>=500."
+
+  - name: latency
+    interval: 30s
+    rules:
+
+      - alert: GatewayP95LatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, route) (rate(apisix_http_latency_bucket{type="request"}[5m]))
+          ) > 1
+        for: 10m
+        labels: { severity: warning, component: gateway }
+        annotations:
+          summary: "p95 gateway latency >1s on {{ $labels.route }} for 10m"
+          description: "Sustained slow responses on a specific route. Compare with upstream service latency to localise."

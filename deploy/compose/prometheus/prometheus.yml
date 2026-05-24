@@ -10,6 +10,11 @@ global:
     cluster: local
     environment: dev
 
+# Alert rules live in a separate file so they're reviewable on their own.
+# See deploy/compose/prometheus/alerts.yml.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
 
   - job_name: prometheus

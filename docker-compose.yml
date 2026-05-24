@@ -400,6 +400,7 @@ services:
       - "--web.enable-lifecycle"
     volumes:
       - ./deploy/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/compose/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"

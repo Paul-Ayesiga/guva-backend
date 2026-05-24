@@ -50,9 +50,10 @@ $(ENV_FILE):
 BASE_SERVICES := postgres redis kafka apicurio rabbitmq keycloak vault minio jaeger otel-collector prometheus grafana
 
 .PHONY: up
-up: ## Bring up the full local stack (detached).
+up: ## Bring up the full local stack (detached), seed Vault, apply migrations.
 	@$(COMPOSE) up -d --wait $(BASE_SERVICES)
 	@bash tools/scripts/seed-vault.sh
+	@$(MAKE) -s migrate
 	@$(COMPOSE) up -d apisix
 	@echo ""
 	@echo "Stack is up. Run 'make status' to see health, 'make logs' to tail, 'make urls' for endpoints."
