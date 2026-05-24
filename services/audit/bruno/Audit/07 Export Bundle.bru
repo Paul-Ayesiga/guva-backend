@@ -1,0 +1,49 @@
+meta {
+  name: 07 Export Bundle
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{apiBaseUrl}}/export?from_id=1&to_id=200
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+docs {
+  Returns a signed JSON bundle covering the requested range. Save the
+  response body to disk and verify offline with:
+
+      tools/audit-verify/audit-verify --bundle response.json --pubkey-url http://localhost:7072/export/pubkey
+
+  Successful exports emit `audit.bundle.exported` as a meta-audit
+  event (see request 06 — adjust the action filter to confirm).
+
+  Verifiers check:
+    1. signing_pubkey matches the platform's current public key
+       (fetch from /export/pubkey).
+    2. signature is a valid Ed25519 signature over canonical JSON
+       of the bundle with signature blanked.
+    3. anchor.anchor_entry_hash chains correctly to entries[0].previous_hash.
+    4. each entry's entry_hash recomputes from its content + previous_hash.
+
+  Bundles cap at 500 entries — page by adjusting from_id.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("bundle has format_version 1", function() {
+    expect(res.body.format_version).to.equal("1");
+  });
+  test("bundle is signed", function() {
+    expect(res.body.signature).to.be.a("string").and.have.length.greaterThan(40);
+    expect(res.body.signing_pubkey).to.be.a("string").and.have.length.greaterThan(20);
+  });
+  test("anchor + entries are present", function() {
+    expect(res.body.anchor).to.be.an("object");
+    expect(res.body.entries).to.be.an("array");
+  });
+}

@@ -1,0 +1,49 @@
+meta {
+  name: 10 Anchor Inclusion Proof
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{apiBaseUrl}}/anchors/{{anchorId}}/proof?entry_id=5
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Returns the Merkle inclusion proof for entry_id=5 within anchor
+  {{anchorId}}'s range. With the proof + leaf_hash + merkle_root, a
+  third party (a journalist, an auditor, a regulator) can confirm
+  that entry was in the chain at the time the anchor was computed —
+  without trusting GUVA. They only need to trust the source of the
+  Merkle root (typically the external witness operator published it to).
+
+  Verification (recompute the root from the proof and compare):
+
+      h = sha256(hex_to_bytes(leaf_hash))
+      for step in proof:
+          if step.side == "L": h = sha256(hex_to_bytes(step.hash) + h)
+          if step.side == "R": h = sha256(h + hex_to_bytes(step.hash))
+      assert hex(h) == merkle_root
+
+  Run "09 List Anchors" first to populate {{anchorId}}. Change the
+  entry_id query parameter to whichever entry you want to prove.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("proof is an array of steps", function() {
+    expect(res.body.proof).to.be.an("array");
+    res.body.proof.forEach(function(s) {
+      expect(s.side).to.be.oneOf(["L","R"]);
+      expect(s.hash).to.match(/^[0-9a-f]{64}$/);
+    });
+  });
+  test("leaf_hash + merkle_root are hex", function() {
+    expect(res.body.leaf_hash).to.match(/^[0-9a-f]{64}$/);
+    expect(res.body.merkle_root).to.match(/^[0-9a-f]{64}$/);
+  });
+}

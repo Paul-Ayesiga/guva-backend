@@ -22,9 +22,13 @@
     { "name": "verify:education", "protocol": "openid-connect", "description": "Verify educational qualifications" },
     { "name": "consent:read", "protocol": "openid-connect", "description": "Read consent records" },
     { "name": "consent:write", "protocol": "openid-connect", "description": "Grant or revoke consent" },
-    { "name": "audit:read", "protocol": "openid-connect", "description": "Read audit log entries" },
-    { "name": "webhooks:manage", "protocol": "openid-connect", "description": "Register and manage webhook subscriptions" },
-    { "name": "admin:consumers", "protocol": "openid-connect", "description": "Administer consumer registrations" }
+    { "name": "audit:read", "protocol": "openid-connect", "description": "Read audit log entries (consumer can read their own; admins read all)" },
+    { "name": "webhooks:manage", "protocol": "openid-connect", "description": "Register and manage webhook subscriptions for the holder's own consumer" },
+    { "name": "admin:consumers", "protocol": "openid-connect", "description": "Administer consumer registrations (create/read/update across all consumers)" },
+    { "name": "admin:scopes", "protocol": "openid-connect", "description": "Read and manage the platform scope catalogue" },
+    { "name": "admin:audit", "protocol": "openid-connect", "description": "Privileged audit operations: bulk export bundles, manage anchors" },
+    { "name": "admin:keys", "protocol": "openid-connect", "description": "Rotate the audit signing key and other platform secrets" },
+    { "name": "admin:webhooks", "protocol": "openid-connect", "description": "Inspect and replay any consumer's webhook deliveries (operations support)" }
   ],
   "roles": {
     "realm": [
@@ -49,6 +53,25 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "defaultClientScopes": ["verify:citizen", "audit:read"]
+    },
+    {
+      "clientId": "guva-platform-admin",
+      "name": "GUVA Platform Admin (local)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "platform-admin-dev-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": [
+        "audit:read",
+        "admin:consumers",
+        "admin:scopes",
+        "admin:audit",
+        "admin:keys",
+        "admin:webhooks"
+      ]
     }
   ]
 }

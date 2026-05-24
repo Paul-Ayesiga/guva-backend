@@ -1,0 +1,23 @@
+meta {
+  name: 05 Delete Subscription
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{apiBaseUrl}}/subscriptions/{{subscriptionId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+docs {
+  Deletes the subscription and CASCADES its delivery rows. Use with
+  care — the delivery audit trail goes with it.
+}
+
+tests {
+  test("status is 204", function() { expect(res.status).to.equal(204); });
+}

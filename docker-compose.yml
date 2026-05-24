@@ -36,6 +36,7 @@ volumes:
   prometheus-data:
   grafana-data:
   jaeger-data:
+  loki-data:
 
 services:
 
@@ -430,4 +431,46 @@ services:
       - ./deploy/compose/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
     depends_on:
       - prometheus
+      - loki
+    networks: [guva]
+
+  # ---------------------------------------------------------------------------
+  # Loki — log aggregation backend for Grafana's log-search experience.
+  # Single binary, filesystem chunks under loki-data. Promtail ships the
+  # container logs (and host-side /tmp/*.log files from `make run-*`)
+  # into it. See docs/AUDIT.md §"Log search via Loki".
+  # ---------------------------------------------------------------------------
+  loki:
+    <<: *restart
+    image: grafana/loki:3.3.2
+    container_name: guva-loki
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./deploy/compose/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [guva]
+
+  # ---------------------------------------------------------------------------
+  # Promtail — tails container logs via /var/lib/docker/containers/*/*.log
+  # and host-mounted /tmp/*.log files from the `make run-*` workflow, ships
+  # them to Loki with stack-aware labels.
+  # ---------------------------------------------------------------------------
+  promtail:
+    <<: *restart
+    image: grafana/promtail:3.3.2
+    container_name: guva-promtail
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./deploy/compose/loki/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /tmp:/host-tmp:ro
+    depends_on:
+      - loki
     networks: [guva]

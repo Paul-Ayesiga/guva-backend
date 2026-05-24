@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,7 @@ import (
 	"github.com/guva-ug/guva-backend/pkg/platform/auth"
 	"github.com/guva-ug/guva-backend/pkg/platform/health"
 	"github.com/guva-ug/guva-backend/pkg/platform/httpserver"
+	"github.com/guva-ug/guva-backend/pkg/platform/observability"
 	"github.com/guva-ug/guva-backend/pkg/platform/problem"
 	"github.com/guva-ug/guva-backend/pkg/secrets"
 	"github.com/guva-ug/guva-backend/services/identity/internal/config"
@@ -154,32 +156,47 @@ func deriveCategory(name string) string {
 	}
 }
 
-// New returns the identity service's *http.Server.
-func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *store.Store, kc *keycloakadmin.Client, vault *secrets.Client) *http.Server {
+// New returns the identity service's *http.Server. When tlsCfg is
+// non-nil the server is started with TLS + mTLS — the peer (APISIX
+// in our setup) must present a client cert signed by the bundle's CA.
+// Pass nil for plain HTTP (the current dev default for services that
+// aren't yet behind mTLS).
+func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *store.Store, kc *keycloakadmin.Client, vault *secrets.Client, tlsCfg *tls.Config) *http.Server {
 	mux := http.NewServeMux()
 
 	cache := newScopeCache(kc, logger)
 
-	// Read endpoints — protected by audit:read (a read-only scope that
-	// guva-reference happens to carry, so we can demo the flow with the
-	// existing dev client). In production this would be admin:consumers
-	// or a dedicated identity:read scope.
-	scopes := auth.RequireScope("audit:read",
+	// GET /scopes — scope catalogue. Any caller carrying `admin:scopes`
+	// (a real platform admin) OR the legacy `audit:read` (dev convenience
+	// so guva-reference can still introspect during smoke tests) reaches
+	// it. In a stricter prod policy this collapses to admin:scopes-only.
+	scopes := auth.RequireAnyScope([]string{"admin:scopes", "audit:read"},
 		otelhttp.NewHandler(scopesHandler(logger, cache), "GET /scopes"))
 	mux.Handle("GET /scopes", scopes)
 
-	consumersGet := auth.RequireScope("audit:read",
+	// GET /consumers/{id} — read a single registration. Admin-only:
+	// only platform operators or the consumer themselves should see
+	// these. Self-service read for a consumer's own row is a deferred
+	// extension; the gating today is admin:consumers.
+	consumersGet := auth.RequireScope("admin:consumers",
 		otelhttp.NewHandler(getConsumerHandler(logger, st), "GET /consumers/{id}"))
 	mux.Handle("GET /consumers/{id}", consumersGet)
 
-	// Write endpoint — also audit:read in dev; production would require
-	// the admin:consumers scope and probably a separate platform-admin
-	// client with stricter rate limits.
-	consumersPost := auth.RequireScope("audit:read",
+	// POST /consumers — register a new consumer. Privileged write that
+	// creates a Keycloak client + a row + a Vault secret in one
+	// transaction. Strictly admin:consumers.
+	consumersPost := auth.RequireScope("admin:consumers",
 		otelhttp.NewHandler(createConsumerHandler(logger, st, kc, vault), "POST /consumers"))
 	mux.Handle("POST /consumers", consumersPost)
 
-	return httpserver.New(httpserver.Config{Addr: cfg.HTTPAddr}, probes, mux)
+	registry, metricsHandler := observability.NewMetricsRegistry()
+	audit.RegisterMetrics(registry)
+
+	return httpserver.New(httpserver.Config{
+		Addr:           cfg.HTTPAddr,
+		MetricsHandler: metricsHandler,
+		TLS:            tlsCfg,
+	}, probes, mux)
 }
 
 func scopesHandler(logger *slog.Logger, cache *scopeCache) http.Handler {

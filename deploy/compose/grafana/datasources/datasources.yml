@@ -16,3 +16,21 @@ datasources:
     jsonData:
       tracesToLogs:
         datasourceUid: prometheus
+
+  # Loki — log search across every container in the stack and the
+  # host-run producer services. Promtail tails Docker logs + the
+  # /tmp/*.log files written by `make run-*` and ships them here.
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      maxLines: 5000
+      # Derived fields turn JSON-encoded slog `correlation_id` values
+      # into clickable links into Jaeger trace search.
+      derivedFields:
+        - matcherRegex: "\"correlation_id\":\"([a-f0-9-]{36})\""
+          name: correlation_id
+          url: "$${__value.raw}"
+          datasourceUid: jaeger

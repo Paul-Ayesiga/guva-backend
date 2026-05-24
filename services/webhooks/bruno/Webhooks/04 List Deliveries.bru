@@ -1,0 +1,30 @@
+meta {
+  name: 04 List Deliveries
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{apiBaseUrl}}/subscriptions/{{subscriptionId}}/deliveries?limit=10
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+docs {
+  Recent delivery attempts for this subscription. Status values:
+    - pending : queued, worker hasn't processed yet
+    - ok      : received 2xx response
+    - retry   : 5xx / connection error; worker will retry
+    - dlq     : exhausted MaxAttempts; in RabbitMQ DLQ webhooks.delivery.dead
+    - error   : terminal error before any delivery attempt
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("deliveries is an array", function() {
+    expect(res.body.deliveries).to.be.an("array");
+  });
+}

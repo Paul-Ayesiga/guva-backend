@@ -1,0 +1,58 @@
+meta {
+  name: 01 Create Subscription
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{apiBaseUrl}}/subscriptions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "consumer_id": "demo-consumer",
+    "target_url": "http://localhost:9099/hook",
+    "event_type_patterns": ["identity.*", "audit.bundle.exported"]
+  }
+}
+
+docs {
+  Creates a subscription. The response includes a `secret` field that is
+  shown ONLY ONCE — store it and use it as the HMAC-SHA256 key when
+  verifying X-Guva-Signature on incoming webhook POSTs.
+
+  Stashes `{{subscriptionId}}` and `{{subscriptionSecret}}` for use by
+  subsequent requests (and your local webhook receiver).
+
+  For a local end-to-end demo, run the tiny receiver at
+  `/tmp/webhook-receiver-demo/main.go` with `WH_SECRET={{subscriptionSecret}}`
+  on port 9099, then trigger an audit event (e.g. create a consumer via
+  the identity collection's "04 Create Consumer") and watch it land.
+}
+
+script:post-response {
+  if (res.status === 201 && res.body) {
+    if (res.body.id) bru.setEnvVar("subscriptionId", res.body.id);
+    if (res.body.secret) bru.setEnvVar("subscriptionSecret", res.body.secret);
+  }
+}
+
+tests {
+  test("status is 201", function() { expect(res.status).to.equal(201); });
+  test("returns one-time secret", function() {
+    expect(res.body.secret).to.be.a("string").and.have.length.greaterThan(40);
+  });
+  test("id is a uuid", function() {
+    expect(res.body.id).to.match(/^[0-9a-f-]{36}$/);
+  });
+}

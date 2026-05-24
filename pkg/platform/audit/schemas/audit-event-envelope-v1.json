@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api.guva.go.ug/schemas/audit-event-envelope/v1",
+  "title": "GUVA Audit Event Envelope (v1)",
+  "description": "CloudEvents-shaped wrapper every producer writes to the audit topic. The envelope shape is locked; service-defined payload sits in `data`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "sourcekind",
+    "type",
+    "subject",
+    "subjectkind",
+    "time",
+    "correlationid",
+    "result",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "description": "CloudEvents spec version. Bump only when the envelope shape itself changes.",
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "description": "Producer-generated event UUID; used as the dedupe key on the audit chain.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "source": {
+      "description": "Identifier of the producer (service name, client id, gateway name).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "sourcekind": {
+      "description": "What kind of actor the source is. Enumerated so spelling drift is caught at publish time.",
+      "type": "string",
+      "enum": ["service", "consumer", "gateway", "operator", "system"]
+    },
+    "type": {
+      "description": "Dotted event type, e.g. `identity.consumer.created`. Convention: `<producer>.<entity>.<action>`.",
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9]*([._-][a-z0-9]+)*$"
+    },
+    "subject": {
+      "description": "Stable id of the thing acted on. Empty string allowed when not subject-scoped.",
+      "type": "string",
+      "maxLength": 256
+    },
+    "subjectkind": {
+      "description": "What kind of thing the subject is. Empty string allowed when not subject-scoped.",
+      "type": "string",
+      "maxLength": 64
+    },
+    "time": {
+      "description": "When the producer observed the event (ISO 8601, UTC).",
+      "type": "string",
+      "format": "date-time"
+    },
+    "correlationid": {
+      "description": "Request correlation id (X-Correlation-Id), if any. Empty string when not available.",
+      "type": "string",
+      "maxLength": 128
+    },
+    "result": {
+      "description": "Outcome of the action from the producer's point of view.",
+      "type": "string",
+      "enum": ["ok", "denied", "error", "inconclusive", "broken"]
+    },
+    "data": {
+      "description": "Service-defined detail. Keep it small (~1 KB) and stable; PII goes in the system of record, not here."
+    }
+  }
+}

@@ -1,0 +1,35 @@
+meta {
+  name: 08 Get Signing Pubkey
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{directBaseUrl}}/export/pubkey
+  auth: none
+}
+
+docs {
+  Returns the platform's current Ed25519 public key. Unauthenticated
+  by design — the key is public.
+
+  Two reasons a verifier fetches this independently rather than
+  trusting the `signing_pubkey` field inside a bundle:
+    1. Fault-isolation: if someone forged the bundle, they forged its
+       signing_pubkey too. Comparing against this endpoint catches that.
+    2. Key rotation: the platform may have rotated to a new key since
+       a bundle was generated; the bundle's `signing_pubkey` is the
+       historical signer, this endpoint is the current one.
+
+  Hit the direct port (7072) because APISIX wraps every /v1/audit/*
+  route in bearer-token validation; the pubkey is public, so we
+  bypass the gateway.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("algorithm is Ed25519", function() { expect(res.body.algorithm).to.equal("Ed25519"); });
+  test("public_key_b64 looks like a 32-byte base64 string", function() {
+    expect(res.body.public_key_b64).to.match(/^[A-Za-z0-9+/=]{40,48}$/);
+  });
+}

@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -20,7 +21,9 @@ import (
 
 	"github.com/guva-ug/guva-backend/pkg/platform/audit"
 	"github.com/guva-ug/guva-backend/pkg/platform/health"
+	"github.com/guva-ug/guva-backend/pkg/platform/httpserver"
 	"github.com/guva-ug/guva-backend/pkg/platform/observability"
+	"github.com/guva-ug/guva-backend/pkg/platform/tlsbundle"
 	"github.com/guva-ug/guva-backend/pkg/secrets"
 	"github.com/guva-ug/guva-backend/services/identity/internal/config"
 	"github.com/guva-ug/guva-backend/services/identity/internal/keycloakadmin"
@@ -117,7 +120,39 @@ func main() {
 	probes := health.New()
 	probes.MarkReady()
 
-	srv := server.New(cfg, logger, probes, st, kcAdmin, vault)
+	// Optional mTLS: if all three GUVA_TLS_* env vars are set, the
+	// server requires a client cert signed by the configured CA.
+	// APISIX is the expected peer; direct curl from the host without
+	// a cert fails closed. See docs/AUTH.md §mTLS.
+	var tlsCfg *tls.Config
+	if cert, key, ca := os.Getenv("GUVA_TLS_CERT"), os.Getenv("GUVA_TLS_KEY"), os.Getenv("GUVA_TLS_CA"); cert != "" && key != "" && ca != "" {
+		bundle, err := tlsbundle.Load(tlsbundle.Config{CertFile: cert, KeyFile: key, CAFile: ca})
+		if err != nil {
+			logger.Error("tlsbundle load failed; refusing to start without the cert material", "error", err)
+			os.Exit(1)
+		}
+		tlsCfg = bundle.ServerConfig()
+		logger.Info("identity TLS enabled (mTLS, peer cert required)", "cert", cert, "ca", ca)
+	}
+
+	srv := server.New(cfg, logger, probes, st, kcAdmin, vault, tlsCfg)
+
+	// Audit envelope validator — pulls the JSON Schema from Apicurio
+	// at startup and installs it as the package-level validator that
+	// every audit.Emit consults. Embedded fallback on registry outage.
+	if validator, err := audit.NewValidator(ctx, audit.ValidatorConfig{
+		RegistryURL: cfg.ApicurioURL,
+		Group:       "guva-audit",
+		ArtifactID:  "audit-event-envelope",
+		Logger:      logger,
+	}); err != nil {
+		logger.Error("audit validator init failed", "error", err)
+		os.Exit(1)
+	} else {
+		audit.SetDefaultValidator(validator)
+		logger.Info("audit envelope validator ready",
+			"source", validator.Source(), "schema_sha256", validator.Digest())
+	}
 
 	// Audit drain worker — tails audit_outbox and publishes to Kafka.
 	// Events are emitted from inside business transactions via
@@ -129,11 +164,12 @@ func main() {
 		Logger:       logger,
 		KafkaBrokers: cfg.KafkaBrokers,
 		KafkaTopic:   cfg.KafkaAuditTopic,
+		Producer:     "identity",
 	})
 
 	go func() {
 		logger.Info("identity service listening", "addr", cfg.HTTPAddr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpserver.ListenAndServeAny(srv); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server failed", "error", err)
 			cancel()
 		}

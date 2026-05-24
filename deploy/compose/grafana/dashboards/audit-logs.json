@@ -1,0 +1,87 @@
+{
+  "title": "Audit — Log search",
+  "uid": "audit-logs",
+  "tags": ["audit", "loki"],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "refresh": "30s",
+  "time": {"from": "now-30m", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+        "query": {"label": "run_log", "type": 1},
+        "current": {"selected": false, "text": "All", "value": "$__all"},
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "All producer logs (last 30m)",
+      "type": "logs",
+      "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+      "targets": [
+        {
+          "expr": "{run_log=~\"$service\"}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 12},
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Errors per service (last 30m)",
+      "type": "timeseries",
+      "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+      "targets": [
+        {
+          "expr": "sum by (run_log) (count_over_time({run_log=~\"$service\"} |= \"\\\"level\\\":\\\"ERROR\\\"\" [1m]))",
+          "refId": "A",
+          "legendFormat": "{{run_log}}"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8}
+    },
+    {
+      "id": 3,
+      "title": "Audit chain events appended / min",
+      "type": "timeseries",
+      "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+      "targets": [
+        {
+          "expr": "sum (count_over_time({run_log=\"audit\"} |= \"audit event appended\" [1m]))",
+          "refId": "A",
+          "legendFormat": "chain inserts"
+        }
+      ],
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8}
+    },
+    {
+      "id": 4,
+      "title": "Audit consumer fetch failures (Kafka)",
+      "type": "logs",
+      "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+      "targets": [
+        {
+          "expr": "{run_log=\"audit\"} |= \"kafka fetch failed\"",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 20, "w": 24, "h": 8},
+      "options": {"showTime": true, "wrapLogMessage": true, "sortOrder": "Descending"}
+    }
+  ]
+}

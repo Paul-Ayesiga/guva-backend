@@ -43,6 +43,7 @@ type Config struct {
 	// Audit emission
 	KafkaBrokers    []string
 	KafkaAuditTopic string
+	ApicurioURL     string
 }
 
 func Load() (Config, error) {
@@ -62,6 +63,7 @@ func Load() (Config, error) {
 		KeycloakRealm:      envOr("KEYCLOAK_REALM", "guva"),
 		KafkaBrokers:       splitCSV(envOr("KAFKA_BROKERS", "localhost:9094")),
 		KafkaAuditTopic:    envOr("KAFKA_AUDIT_TOPIC", "ug.go.guva.audit.entry.appended.v1"),
+		ApicurioURL:        envOr("APICURIO_URL", "http://localhost:8081"),
 	}
 
 	level, err := parseLevel(envOr("IDENTITY_LOG_LEVEL", "info"))

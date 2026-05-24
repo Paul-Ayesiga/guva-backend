@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"crypto/tls"
 	"net/http"
 	"time"
 
@@ -10,6 +11,17 @@ import (
 // Config captures the sensible-defaults inputs for New.
 type Config struct {
 	Addr string // e.g. ":7070"
+	// MetricsHandler, if non-nil, is mounted at GET /metrics. Build one
+	// with observability.NewMetricsRegistry. Services that already mount
+	// /metrics on their own mux can leave this nil to avoid the conflict.
+	MetricsHandler http.Handler
+	// TLS, if non-nil, makes the returned server serve HTTPS with mTLS
+	// — the peer (e.g. APISIX) must present a client cert signed by
+	// the bundle's CA, and unauthenticated direct curl access fails.
+	// Build with tlsbundle.Load(...).ServerConfig(). Leave nil for
+	// plain HTTP (the dev default; APISIX is the only "client" today
+	// and the gateway boundary is the trust boundary).
+	TLS *tls.Config
 }
 
 // New returns an *http.Server with platform-standard timeouts and a
@@ -28,6 +40,9 @@ func New(cfg Config, probes *health.Probes, businessRoutes http.Handler) *http.S
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", Liveness())
 	mux.Handle("/readyz", Readiness(probes))
+	if cfg.MetricsHandler != nil {
+		mux.Handle("/metrics", cfg.MetricsHandler)
+	}
 	if businessRoutes != nil {
 		mux.Handle("/", businessRoutes)
 	}
@@ -35,11 +50,27 @@ func New(cfg Config, probes *health.Probes, businessRoutes http.Handler) *http.S
 	return &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           WithCorrelationID(mux),
+		TLSConfig:         cfg.TLS,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+}
+
+// ListenAndServeAny picks between ListenAndServe and ListenAndServeTLS
+// based on whether the server has a TLSConfig. Convenience for service
+// mains so they don't have to branch:
+//
+//	if err := httpserver.ListenAndServeAny(srv); err != nil && ...
+//
+// Internally, ListenAndServeTLS reads the cert/key from the TLSConfig
+// directly when called with empty string arguments.
+func ListenAndServeAny(srv *http.Server) error {
+	if srv.TLSConfig != nil {
+		return srv.ListenAndServeTLS("", "")
+	}
+	return srv.ListenAndServe()
 }
 
 // Liveness returns a handler that always responds 200 with a minimal

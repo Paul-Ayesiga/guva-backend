@@ -215,7 +215,96 @@ A natural follow-up (Phase 2.5) is adding **Prometheus alerts** that page when a
 
 ---
 
-## 8. Open questions and follow-ups
+## 8. RBAC — admin vs consumer
+
+The realm carries two flavours of client today:
+
+| Client | Default scopes | Used for |
+|---|---|---|
+| `guva-reference` | `verify:citizen`, `audit:read` | Smoke-test consumer; reaches /scopes (legacy) + audit reads only |
+| `guva-platform-admin` | `audit:read`, `admin:consumers`, `admin:scopes`, `admin:audit`, `admin:keys`, `admin:webhooks` | Platform operators; reaches consumer admin + bulk audit export |
+
+Admin scopes added in this slice and what they gate:
+
+| Scope | Gates |
+|---|---|
+| `admin:consumers` | `POST /v1/identity/consumers`, `GET /v1/identity/consumers/{id}` |
+| `admin:scopes` | `GET /v1/identity/scopes` (legacy `audit:read` still accepted via OR semantics for the dev `guva-reference` client; collapse to admin-only in prod) |
+| `admin:audit` | `GET /v1/audit/export` (bulk signed bundles) |
+| `admin:keys` | (reserved) signing-key rotation endpoints, when added |
+| `admin:webhooks` | (reserved) cross-consumer webhook inspection + replay |
+
+Enforcement is via [`pkg/platform/auth.RequireAnyScope`](../pkg/platform/auth/auth.go) at each route. Scopes added to the realm at boot via [`tools/scripts/seed-keycloak.sh`](../tools/scripts/seed-keycloak.sh) (Admin API; idempotent so re-running is a no-op). `make up` invokes the seed; `make seed-keycloak` re-runs on demand.
+
+**Test it:** Bruno requests `00b Get Admin Token` in both `services/identity/bruno` and `services/audit/bruno` pull a token from `guva-platform-admin`; the privileged requests (`03 List Scopes`, `04 Create Consumer`, `05 Get Consumer`, `07 Export Bundle`) consume `{{adminAccessToken}}`. Run them with the consumer-flavoured `{{accessToken}}` from `00 Get Token` instead and you'll get the expected `403 insufficient_scope`.
+
+---
+
+## 9. Workload mTLS
+
+The platform supports per-service TLS with mandatory client certs (mTLS) on the server side. Wired today as an opt-in capability via env vars; production adoption pattern is service-mesh auto-mTLS (Istio / Linkerd at the pod sidecar).
+
+### Capability shipped
+
+| Layer | Where | What it does |
+|---|---|---|
+| Cert minting | [`tools/scripts/mint-service-certs.sh`](../tools/scripts/mint-service-certs.sh) | One-shot dev CA under `.cache/dev-ca/`, leaf certs per service under `.cache/certs/<svc>/`. Idempotent; `--force` to rotate a leaf. |
+| Loader | [`pkg/platform/tlsbundle`](../pkg/platform/tlsbundle/tlsbundle.go) | `Load(cfg)` reads cert/key/CA from disk; `ServerConfig()` returns `*tls.Config` with `RequireAndVerifyClientCert` + TLS 1.3 min. |
+| Server | [`pkg/platform/httpserver`](../pkg/platform/httpserver/server.go) | `Config.TLS *tls.Config` + `ListenAndServeAny(srv)` — TLS when configured, plain HTTP otherwise; same call site. |
+| Identity | [`services/identity/cmd/server/main.go`](../services/identity/cmd/server/main.go) | Reads `GUVA_TLS_CERT` / `GUVA_TLS_KEY` / `GUVA_TLS_CA` env vars; if all set, enables mTLS. |
+
+### Try it (the demonstration)
+
+```bash
+make mint-service-certs   # if not already done
+
+GUVA_TLS_CERT=$(pwd)/.cache/certs/identity/cert.pem \
+GUVA_TLS_KEY=$(pwd)/.cache/certs/identity/key.pem \
+GUVA_TLS_CA=$(pwd)/.cache/certs/identity/ca.pem \
+  make run-identity
+
+# Plain HTTP — refused (server speaks TLS now):
+curl -i http://localhost:7071/healthz
+#   HTTP/1.1 400 Bad Request
+
+# HTTPS without client cert — TLS handshake fails:
+curl -k https://localhost:7071/healthz
+#   curl: (35) error:0A00045C:SSL routines::tlsv13 alert certificate required
+
+# HTTPS WITH client cert — 200:
+curl -k --cert .cache/certs/identity/cert.pem \
+        --key  .cache/certs/identity/key.pem \
+        --cacert .cache/certs/identity/ca.pem \
+        https://localhost:7071/healthz
+#   {"status":"alive"}
+```
+
+### What's deliberately not wired (and why)
+
+APISIX → identity over mTLS is **not** enabled in the standard dev flow. Two reasons:
+
+1. **APISIX standalone YAML inlines PEMs.** The gateway's bind-mount file would need 60+ lines of PEM per upstream, and we've already hit one bind-mount truncation bug on macOS (`docs/OPERATIONS.md §2`). Inlining is fragile and not worth the brittleness for dev.
+2. **The production answer isn't APISIX-managed mTLS.** It's a service mesh (Istio, Linkerd) doing auto-mTLS between pods, where neither the app nor the gateway needs cert config — sidecars handle it transparently. The platform code we shipped here is the right primitive for that future (the loader + server config), and **already runs unchanged inside a meshed pod** because the mesh mounts the cert at the same path conventions.
+
+If you want APISIX → identity mTLS in dev today, the wiring is:
+
+- Mount `.cache/dev-ca/ca.crt` into the apisix container.
+- Add `apisix.ssl.ssl_trusted_certificate: /usr/local/apisix/conf/ca/dev-ca.crt` to `config.yaml`.
+- On the `identity-public` route in `apisix.yaml`, set `upstream.scheme: https` and embed the APISIX cert + key as PEM literal blocks under `upstream.tls`.
+- Restart the gateway and identity (with the env vars from the demo above).
+- Re-run `make check-apisix` to confirm the bind-mount survived.
+
+### Production migration
+
+Pick **one** of:
+
+- **Service mesh** (recommended): Istio or Linkerd, mTLS in PERMISSIVE then STRICT mode, no app changes needed; the [tlsbundle](../pkg/platform/tlsbundle/tlsbundle.go) package is unused at runtime because the sidecar terminates and originates TLS.
+- **SPIFFE/SPIRE workload identity**: each service mounts its SVID; [tlsbundle](../pkg/platform/tlsbundle/tlsbundle.go) reads it the same way it reads the dev cert today. Add a SPIRE agent sidecar; the GUVA service code doesn't change.
+- **Vault PKI + cert-manager**: certs minted by Vault's PKI engine, mounted via cert-manager-issued secrets. Same loader interface.
+
+---
+
+## 10. Open questions and follow-ups
 
 - **Citizen-facing auth code flow** — not implemented; needs PKCE + session handling at APISIX or a dedicated front-end gateway.
 - **`api.guva.localhost`** — currently the API is on `localhost:8000`. Routing it through Caddy at `https://api.guva.localhost` is a small follow-up but means more env var changes; deferred to keep this slice focused.
@@ -225,7 +314,7 @@ A natural follow-up (Phase 2.5) is adding **Prometheus alerts** that page when a
 
 ---
 
-## 9. Cross-references
+## 11. Cross-references
 
 - [DEVELOPMENT.md](./DEVELOPMENT.md) — developer-facing walkthrough.
 - [../../guva-docs/05-security/10-security-architecture.md](../../guva-docs/05-security/10-security-architecture.md) — platform-wide security architecture.

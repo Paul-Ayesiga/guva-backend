@@ -80,6 +80,11 @@ paths:
           schema: { type: string }
         - in: query
           name: action
+          description: |
+            Event type. Producer-defined; current vocabulary includes
+            `identity.consumer.created`, `audit.entries.queried`,
+            `audit.chain.verified` (the last two are meta-audit events
+            emitted by this service when its own read endpoints are called).
           schema: { type: string, example: "identity.consumer.created" }
         - in: query
           name: result
@@ -131,6 +136,12 @@ paths:
         "401": { description: missing or invalid bearer token }
         "403": { description: token does not carry audit:read }
         "400": { description: malformed filter }
+        "500":
+          description: |
+            Either the read itself failed, or the meta-audit emit failed
+            and the response was withheld so the read does not leak
+            untraced. `type` distinguishes the two: `internal_error` vs
+            `meta_audit_failed`.
 
   /verify:
     get:
@@ -173,6 +184,206 @@ paths:
                   value: { ok: false, broken_at: 42, broken_uuid: "abc...", detail: "previous_hash mismatch" }
         "401": { description: missing or invalid bearer token }
         "403": { description: token does not carry audit:read }
+        "500":
+          description: |
+            Either the verify walk failed, or the meta-audit emit failed
+            and the response was withheld. `type` distinguishes the two:
+            `internal_error` vs `meta_audit_failed`.
+
+  /export:
+    get:
+      tags: [export]
+      summary: Sign and return a chain range as a verifiable bundle
+      description: |
+        Returns a signed JSON bundle containing the requested chain
+        range plus the anchor (entry_hash of the row preceding the
+        range, or genesis). Verifiers use `pkg/platform/audit` —
+        either as a Go import or via the standalone `audit-verify`
+        binary in `tools/audit-verify/` — to:
+
+          1. Verify the Ed25519 signature against canonical JSON.
+          2. Walk the chain inside the bundle, recomputing each
+             entry_hash and asserting the chain link from `anchor`.
+
+        Bundles cap at 500 entries; for larger ranges, page by
+        adjusting from_id. Each call also emits an
+        `audit.bundle.exported` meta-audit event.
+      parameters:
+        - in: query
+          name: from_id
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - in: query
+          name: to_id
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: A signed bundle
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - format_version
+                  - generator
+                  - generated_at
+                  - range_from_id
+                  - range_to_id
+                  - anchor
+                  - entries
+                  - signing_pubkey
+                  - signature
+                properties:
+                  format_version: { type: string, example: "1" }
+                  generator: { type: string, example: "guva-audit" }
+                  generated_at: { type: string, format: date-time }
+                  range_from_id: { type: integer, format: int64 }
+                  range_to_id: { type: integer, format: int64 }
+                  anchor:
+                    type: object
+                    properties:
+                      anchor_entry_id: { type: integer, format: int64 }
+                      anchor_entry_hash: { type: string, description: "hex SHA-256; 64×'0' for genesis" }
+                  entries:
+                    type: array
+                    items: { $ref: '#/components/schemas/Entry' }
+                  signing_pubkey:
+                    type: string
+                    description: Base64 (std) of the Ed25519 public key the signature was created with.
+                  signature:
+                    type: string
+                    description: Base64 (std) of the Ed25519 signature over canonical JSON of the bundle with signature blanked.
+        "400": { description: malformed from_id / to_id }
+        "401": { description: missing or invalid bearer token }
+        "403": { description: token does not carry audit:read }
+        "500":
+          description: |
+            Internal failure (list, sign, or meta-audit emit). The bundle
+            is withheld if meta-audit fails — same fail-closed policy
+            as /entries and /verify.
+
+  /export/pubkey:
+    get:
+      tags: [export]
+      summary: Return the Ed25519 public key currently used for bundle signing
+      description: |
+        Unauthenticated by design — the public key is public. Verifiers
+        fetch this so the bundle's `signing_pubkey` field can be
+        sanity-checked against the platform's current key.
+      responses:
+        "200":
+          description: Public key
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [algorithm, public_key_b64]
+                properties:
+                  algorithm: { type: string, enum: [Ed25519] }
+                  public_key_b64: { type: string, description: "Base64 (std) of the 32-byte Ed25519 public key" }
+
+  /anchors:
+    get:
+      tags: [anchors]
+      summary: List Merkle anchors over the chain (most recent first)
+      description: |
+        Each anchor is a binary-Merkle root over a contiguous range of
+        chain entries. The audit service computes one every
+        `AUDIT_ANCHOR_INTERVAL` (default 5m). An operator may publish
+        a root to an external witness; the receipt is stored in
+        `external_proof`. See docs/AUDIT.md §"External Merkle anchoring".
+      parameters:
+        - in: query
+          name: after
+          description: Cursor — return anchors with anchor_id < after.
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 500 }
+      responses:
+        "200":
+          description: Page of anchors
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  anchors:
+                    type: array
+                    items: { $ref: '#/components/schemas/Anchor' }
+                  count: { type: integer }
+                  next_cursor: { type: integer, format: int64 }
+        "401": { description: missing or invalid bearer token }
+        "403": { description: token does not carry audit:read }
+
+  /anchors/{id}:
+    get:
+      tags: [anchors]
+      summary: Get a single anchor by id
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: The anchor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Anchor' }
+        "404": { description: no anchor with that id }
+
+  /anchors/{id}/proof:
+    get:
+      tags: [anchors]
+      summary: Merkle inclusion proof for an entry within the anchor's range
+      description: |
+        Given the returned `leaf_hash`, `proof`, and `merkle_root`, a
+        third party can recompute the root by walking the proof from
+        the leaf upward — independently confirming the entry was on
+        the chain when the anchor was computed.
+
+        Verification (pseudocode):
+
+            h = sha256( hex_to_bytes(leaf_hash) )
+            for step in proof:
+                if step.side == "L": h = sha256(hex_to_bytes(step.hash) || h)
+                if step.side == "R": h = sha256(h || hex_to_bytes(step.hash))
+            assert hex(h) == merkle_root
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: entry_id
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Inclusion proof
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  anchor_id:     { type: integer, format: int64 }
+                  merkle_root:   { type: string, description: "hex SHA-256" }
+                  algorithm:     { type: string, example: "sha256-binary-merkle-v1" }
+                  range_from_id: { type: integer, format: int64 }
+                  range_to_id:   { type: integer, format: int64 }
+                  entry_id:      { type: integer, format: int64 }
+                  leaf_index:    { type: integer }
+                  leaf_hash:     { type: string, description: "hex SHA-256 of the entry's entry_hash bytes" }
+                  proof:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        side: { type: string, enum: [L, R] }
+                        hash: { type: string, description: "hex SHA-256" }
+        "400": { description: entry_id is outside the anchor's range }
+        "404": { description: no anchor with that id }
 
 components:
   securitySchemes:
@@ -182,6 +393,25 @@ components:
       bearerFormat: JWT
 
   schemas:
+    Anchor:
+      type: object
+      required: [anchor_id, range_from_id, range_to_id, leaf_count, merkle_root, algorithm, computed_at]
+      properties:
+        anchor_id:      { type: integer, format: int64 }
+        range_from_id:  { type: integer, format: int64 }
+        range_to_id:    { type: integer, format: int64 }
+        leaf_count:     { type: integer, format: int64 }
+        merkle_root:    { type: string, description: "hex SHA-256" }
+        algorithm:      { type: string, example: "sha256-binary-merkle-v1" }
+        computed_at:    { type: string, format: date-time }
+        external_proof:
+          description: |
+            Operator-attached witness receipt (Sigstore Rekor entry,
+            blockchain tx hash, consortium-ledger pointer, etc.).
+            Absent until the operator publishes the root externally.
+          oneOf:
+            - type: object
+            - type: 'null'
     Entry:
       type: object
       required: [entry_id, entry_uuid, occurred_at, actor_kind, actor_id,

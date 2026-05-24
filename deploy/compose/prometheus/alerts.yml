@@ -82,3 +82,39 @@ groups:
         annotations:
           summary: "p95 gateway latency >1s on {{ $labels.route }} for 10m"
           description: "Sustained slow responses on a specific route. Compare with upstream service latency to localise."
+
+  # The audit_outbox is the bridge between a producer's local DB and
+  # Kafka. The Worker drains every 500 ms. Sustained backlog means the
+  # Worker is stuck (broker down, network broken, bug) and chain
+  # coverage is degrading — events are committed locally but invisible
+  # to the audit chain until the drain catches up.
+  - name: audit-outbox
+    interval: 30s
+    rules:
+
+      - alert: AuditOutboxBacklogWarning
+        expr: guva_audit_outbox_unsent_count > 100
+        for: 5m
+        labels: { severity: warning, component: audit }
+        annotations:
+          summary: "audit_outbox backlog on {{ $labels.producer }} > 100 for 5m"
+          description: "The drain worker on {{ $labels.producer }} cannot publish to Kafka fast enough. Producer DB has staged events the audit chain has not received yet. Check Kafka health and the producer's logs for 'audit drain tick failed'."
+          runbook: "docs/OPERATIONS.md §audit-outbox"
+
+      - alert: AuditOutboxBacklogCritical
+        expr: guva_audit_outbox_unsent_count > 1000
+        for: 5m
+        labels: { severity: critical, component: audit }
+        annotations:
+          summary: "audit_outbox backlog on {{ $labels.producer }} > 1000 for 5m"
+          description: "Severe audit-chain coverage gap on {{ $labels.producer }}. Investigate immediately: the drain Worker is either down or unable to reach Kafka. Events older than 5 minutes are not yet on the chain."
+          runbook: "docs/OPERATIONS.md §audit-outbox"
+
+      - alert: AuditOutboxDrainErrors
+        expr: rate(guva_audit_outbox_drain_errors_total[5m]) > 0.1
+        for: 5m
+        labels: { severity: warning, component: audit }
+        annotations:
+          summary: "audit_outbox drain errors > 0.1/s on {{ $labels.producer }} for 5m"
+          description: "Drain failures are sustained, not transient. Even if the backlog isn't yet large, the chain will fall behind soon. Inspect 'audit drain tick failed' logs on {{ $labels.producer }}."
+          runbook: "docs/OPERATIONS.md §audit-outbox"

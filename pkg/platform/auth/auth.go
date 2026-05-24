@@ -101,18 +101,30 @@ func FromContext(ctx context.Context) (Claims, bool) {
 // not carry the named scope. The parsed claims are stashed on the context
 // for downstream handlers via FromContext.
 func RequireScope(scope string, next http.Handler) http.Handler {
+	return RequireAnyScope([]string{scope}, next)
+}
+
+// RequireAnyScope is RequireScope with OR semantics: the request passes
+// when the token carries ANY of the listed scopes. Used to wire
+// endpoints that are reachable by either a consumer (e.g. holding
+// `audit:read` for their own data) or a platform admin (holding the
+// equivalent `admin:audit`). Reports the full required set in the
+// 403 body so the caller knows what would have worked.
+func RequireAnyScope(scopes []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims, err := FromAuthorization(r.Header.Get("Authorization"))
 		if err != nil {
 			problem.Write(w, http.StatusUnauthorized, "invalid_token", err.Error())
 			return
 		}
-		if !claims.HasScope(scope) {
-			problem.Write(w, http.StatusForbidden, "insufficient_scope",
-				"required scope: "+scope)
-			return
+		for _, s := range scopes {
+			if claims.HasScope(s) {
+				ctx := context.WithValue(r.Context(), claimsKey, claims)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 		}
-		ctx := context.WithValue(r.Context(), claimsKey, claims)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		problem.Write(w, http.StatusForbidden, "insufficient_scope",
+			"required any of: "+strings.Join(scopes, ", "))
 	})
 }

@@ -1,0 +1,212 @@
+openapi: 3.1.0
+info:
+  title: GUVA Webhooks
+  version: "0.1.0"
+  description: |
+    Outbound delivery of audit events to consumer-registered URLs.
+
+    Each consumer registers one or more **subscriptions** describing a
+    set of event-type patterns + a target URL. The matcher reads audit
+    events off Kafka, looks up matching subscriptions, and the delivery
+    worker POSTs an HMAC-signed envelope to each target with retries
+    and a dead-letter queue.
+
+    See `docs/WEBHOOKS.md` for the signature recipe, retry policy,
+    and the dev-side webhook receiver.
+
+servers:
+  - url: http://localhost:8000/v1/webhooks
+    description: Through the APISIX gateway
+  - url: http://localhost:7074
+    description: Direct (development, bypasses the gateway)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      tags: [ops]
+      summary: Liveness
+      security: []
+      responses:
+        "200": { description: alive }
+
+  /readyz:
+    get:
+      tags: [ops]
+      summary: Readiness
+      security: []
+      responses:
+        "200": { description: ready }
+        "503": { description: not ready }
+
+  /subscriptions:
+    post:
+      tags: [subscriptions]
+      summary: Create a webhook subscription
+      description: |
+        Generates a fresh 32-byte HMAC secret and returns it ONCE in
+        the response. Callers must persist it; subsequent GETs never
+        echo it back.
+
+        Callers carrying `webhooks:manage` create only for themselves
+        (consumer_id pinned to their `azp` claim). Callers with
+        `admin:webhooks` may create for any consumer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_url, event_type_patterns]
+              properties:
+                consumer_id:
+                  type: string
+                  description: Required only for admin callers; self-service uses the token's azp.
+                target_url:
+                  type: string
+                  format: uri
+                  example: "https://consumer.example/guva-webhook"
+                event_type_patterns:
+                  type: array
+                  items: { type: string }
+                  example: ["identity.*", "audit.bundle.exported"]
+      responses:
+        "201":
+          description: Created (includes one-time secret)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionWithSecret' }
+        "400": { description: invalid input }
+        "403": { description: consumer mismatch (non-admin tried to create for another consumer) }
+
+    get:
+      tags: [subscriptions]
+      summary: List subscriptions
+      description: |
+        Self-service: returns the caller's own subscriptions.
+        Admin (`admin:webhooks`): returns all, or filter via `consumer_id` query param.
+      parameters:
+        - in: query
+          name: consumer_id
+          description: Admin only — filter by consumer
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100, maximum: 500 }
+      responses:
+        "200":
+          description: A page of subscriptions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subscriptions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Subscription' }
+                  count: { type: integer }
+
+  /subscriptions/{id}:
+    get:
+      tags: [subscriptions]
+      summary: Get one subscription
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        "404": { description: no subscription with that id }
+        "403": { description: subscription belongs to a different consumer }
+
+    delete:
+      tags: [subscriptions]
+      summary: Delete a subscription
+      description: Cascades to delivery rows.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: deleted }
+        "404": { description: no subscription with that id }
+        "403": { description: subscription belongs to a different consumer }
+
+  /subscriptions/{id}/deliveries:
+    get:
+      tags: [deliveries]
+      summary: List recent deliveries for a subscription
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100, maximum: 500 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveries:
+                    type: array
+                    items: { $ref: '#/components/schemas/Delivery' }
+                  count: { type: integer }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Subscription:
+      type: object
+      required: [id, consumer_id, target_url, event_type_patterns, enabled, created_at]
+      properties:
+        id:                   { type: string, format: uuid }
+        consumer_id:          { type: string }
+        target_url:           { type: string, format: uri }
+        event_type_patterns:  { type: array, items: { type: string } }
+        enabled:              { type: boolean }
+        created_at:           { type: string, format: date-time }
+        updated_at:           { type: string, format: date-time }
+        last_delivery_at:     { type: string, format: date-time }
+        last_delivery_status: { type: integer }
+        last_delivery_error:  { type: string }
+
+    SubscriptionWithSecret:
+      allOf:
+        - $ref: '#/components/schemas/Subscription'
+        - type: object
+          properties:
+            secret: { type: string, description: "Hex-encoded 32-byte HMAC-SHA256 key. Returned ONCE." }
+            _note: { type: string }
+
+    Delivery:
+      type: object
+      properties:
+        id:               { type: integer }
+        delivery_uuid:    { type: string, format: uuid }
+        subscription_id:  { type: string, format: uuid }
+        event_uuid:       { type: string, format: uuid }
+        event_type:       { type: string }
+        attempt:          { type: integer }
+        status:           { type: string, enum: [pending, ok, retry, dlq, error] }
+        http_status:      { type: integer }
+        response_excerpt: { type: string }
+        error:            { type: string }
+        queued_at:        { type: string, format: date-time }
+        attempted_at:     { type: string, format: date-time }
+        next_retry_at:    { type: string, format: date-time }

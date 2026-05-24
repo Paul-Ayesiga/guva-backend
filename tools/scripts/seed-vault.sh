@@ -9,8 +9,11 @@
 #
 # Secrets seeded:
 #   secret/services/reference/config :greeting=hello-from-vault
-#   secret/services/identity/config  :keycloak-admin-password=admin
+#   secret/services/identity/config  :db-password=guva
+#                                    :keycloak-admin-password=admin
 #                                    :keycloak-admin-username=admin
+#   secret/services/audit/config     :db-writer-password=audit-writer-dev
+#                                    :db-reader-password=audit-reader-dev
 #
 # All values are local-only. Production secrets are sourced from a real
 # secret store via the path documented in docs/ENVIRONMENTS.md §3.
@@ -59,6 +62,9 @@ write_kv "services/identity/config" \
   "db-password=guva" \
   "keycloak-admin-username=admin" \
   "keycloak-admin-password=admin"
+write_kv "services/audit/config" \
+  "db-writer-password=audit-writer-dev" \
+  "db-reader-password=audit-reader-dev"
 
 echo "==> Done. Inspect with:"
 echo "    VAULT_ADDR=${VAULT_ADDR} VAULT_TOKEN=${VAULT_TOKEN} vault kv get secret/services/reference/config"

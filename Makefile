@@ -47,20 +47,40 @@ $(ENV_FILE):
 # be healthy, then starts APISIX. APISIX validates bearer tokens via OIDC
 # discovery against Keycloak (no pinned keys, no rendered config).
 
-BASE_SERVICES := postgres redis kafka apicurio rabbitmq keycloak caddy vault minio jaeger otel-collector prometheus grafana
+BASE_SERVICES := postgres redis kafka apicurio rabbitmq keycloak caddy vault minio jaeger otel-collector prometheus grafana loki promtail
 
 .PHONY: up
-up: ## Bring up the full local stack (detached), seed Vault, apply migrations.
+up: ## Bring up the full local stack (detached), seed Vault, apply migrations, register schemas, seed Keycloak admin roles.
 	@$(COMPOSE) up -d --wait $(BASE_SERVICES)
 	@bash tools/scripts/seed-vault.sh
+	@bash tools/scripts/seed-schemas.sh
+	@bash tools/scripts/seed-keycloak.sh
 	@$(MAKE) -s migrate
 	@$(COMPOSE) up -d apisix
+	@sleep 2
+	@bash tools/scripts/check-apisix.sh
 	@echo ""
 	@echo "Stack is up. Run 'make status' to see health, 'make logs' to tail, 'make urls' for endpoints."
+
+.PHONY: seed-keycloak
+seed-keycloak: ## Idempotently add admin scopes + guva-platform-admin client to the Keycloak realm via Admin API.
+	@bash tools/scripts/seed-keycloak.sh
+
+.PHONY: mint-service-certs
+mint-service-certs: ## Mint a dev CA + per-service mTLS certs under .cache/. See docs/AUTH.md §9.
+	@bash tools/scripts/mint-service-certs.sh
+
+.PHONY: check-apisix
+check-apisix: ## Verify APISIX plugin allowlist + bind-mount parity. Auto-restarts on mount drift.
+	@bash tools/scripts/check-apisix.sh
 
 .PHONY: seed-vault
 seed-vault: ## Re-seed Vault with the dev secrets every service needs at startup.
 	@bash tools/scripts/seed-vault.sh
+
+.PHONY: seed-schemas
+seed-schemas: ## Register / update audit event schemas in Apicurio Registry.
+	@bash tools/scripts/seed-schemas.sh
 
 .PHONY: up-fg
 up-fg: ## Bring up the full local stack in the foreground (Ctrl-C to stop).
@@ -227,7 +247,10 @@ urls: ## Print local service URLs.
 	  "Kafka             localhost:9094" \
 	  "Reference svc     http://localhost:7070  (run: make run-reference)" \
 	  "Identity svc      http://localhost:7071  (run: make run-identity; through gateway: /v1/identity/*)" \
-	  "Audit svc         http://localhost:7072  (run: make run-audit;    through gateway: /v1/audit/*)"
+	  "Audit svc         http://localhost:7072  (run: make run-audit;    through gateway: /v1/audit/*)" \
+	  "APISIX-adapter    http://localhost:7073  (run: make run-apisix-adapter; receives gateway access logs)" \
+	  "Webhooks svc      http://localhost:7074  (run: make run-webhooks; through gateway: /v1/webhooks/*)" \
+	  "Loki              http://localhost:3100  (log search, exposed via Grafana \"Audit — Log search\" dashboard)"
 
 .PHONY: clean
 clean: ## Remove build artifacts.

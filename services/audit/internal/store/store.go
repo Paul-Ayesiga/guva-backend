@@ -19,35 +19,75 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Store wraps two pgx pools, one per Postgres role:
+//
+//   - reader is used by all SELECT-only paths (HTTP /entries, /verify).
+//     The role lacks INSERT/UPDATE/DELETE on the chain, so a bug in
+//     the read path cannot mutate the ledger.
+//   - writer is used by AppendEntry (chain INSERT) and by the meta-audit
+//     emitter that stages rows in audit_outbox.
+//
+// See docs/OPERATIONS.md §8 for the defense-in-depth rationale.
 type Store struct {
-	pool *pgxpool.Pool
+	reader *pgxpool.Pool
+	writer *pgxpool.Pool
 }
 
-func Open(ctx context.Context, dsn string) (*Store, error) {
+// Open dials both roles. Both DSNs must point at the same database; the
+// only difference is the role (user) the connection authenticates as.
+// readerDSN and writerDSN may be identical for single-role local dev,
+// in which case the same pool is used for both — but the call sites
+// continue to think of "Reader" and "Writer" as distinct, so flipping
+// the roles back on later is a one-line config change.
+func Open(ctx context.Context, readerDSN, writerDSN string) (*Store, error) {
+	rp, err := openPool(ctx, readerDSN, "reader")
+	if err != nil {
+		return nil, err
+	}
+	wp, err := openPool(ctx, writerDSN, "writer")
+	if err != nil {
+		rp.Close()
+		return nil, err
+	}
+	return &Store{reader: rp, writer: wp}, nil
+}
+
+func openPool(ctx context.Context, dsn, label string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("parse dsn: %w", err)
+		return nil, fmt.Errorf("parse %s dsn: %w", label, err)
 	}
 	cfg.MaxConns = 8
 	cfg.ConnConfig.ConnectTimeout = 5 * time.Second
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("pool init: %w", err)
+		return nil, fmt.Errorf("%s pool init: %w", label, err)
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("ping: %w", err)
+		return nil, fmt.Errorf("%s ping: %w", label, err)
 	}
-	return &Store{pool: pool}, nil
+	return pool, nil
 }
 
 func (s *Store) Close() {
-	if s.pool != nil {
-		s.pool.Close()
+	if s.writer != nil {
+		s.writer.Close()
+	}
+	if s.reader != nil {
+		s.reader.Close()
 	}
 }
+
+// Reader returns the SELECT-only pool. Use for query paths that have no
+// reason to mutate state.
+func (s *Store) Reader() *pgxpool.Pool { return s.reader }
+
+// Writer returns the INSERT/UPDATE-capable pool. Used by AppendEntry and
+// by the meta-audit emitter (which stages rows in audit_outbox).
+func (s *Store) Writer() *pgxpool.Pool { return s.writer }
 
 // Entry is the wire shape consumed from Kafka. We don't expose the
 // pgx row type to keep store boundaries clean.
@@ -64,21 +104,36 @@ type Entry struct {
 	Detail        json.RawMessage
 }
 
+// chainAppendLockID is the transactional advisory-lock key all writers
+// hold while computing prev_hash → INSERT. Picked arbitrarily; only
+// meaningful in that every GUVA audit chain writer (this service today,
+// any sharded variant tomorrow) uses the same value.
+const chainAppendLockID = 8732
+
 // AppendEntry inserts the event onto the chain. Idempotent on entry_uuid:
 // a duplicate Kafka delivery resolves to (existedAlready=true, err=nil)
 // without extending the chain.
 //
-// Ordering: the function takes a transactional SELECT FOR UPDATE on the
-// latest row, computes the new hash, then INSERTs. Concurrent
-// AppendEntry calls serialise. In our single-consumer-per-partition
-// setup this is defence in depth; if we ever scale the audit consumer
-// horizontally per partition, this still holds.
+// Ordering: the function acquires a transactional advisory lock keyed
+// by chainAppendLockID before reading the previous hash, holds it
+// through the INSERT, and releases on COMMIT/ROLLBACK. This serialises
+// concurrent appenders without needing UPDATE privilege on the table
+// (the writer role intentionally lacks UPDATE — see
+// docs/OPERATIONS.md §8). Earlier versions of this code used
+// SELECT ... FOR UPDATE which silently required UPDATE; switching to
+// pg_advisory_xact_lock keeps the serialisation property and respects
+// the role boundary.
 func (s *Store) AppendEntry(ctx context.Context, e Entry) (existedAlready bool, err error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.writer.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return false, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op if commit ran
+
+	// Serialise chain appends. Released automatically at COMMIT/ROLLBACK.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, chainAppendLockID); err != nil {
+		return false, fmt.Errorf("acquire chain lock: %w", err)
+	}
 
 	// Dedupe by entry_uuid. The unique constraint would catch this on
 	// INSERT, but checking up front avoids spurious chain extensions
@@ -92,17 +147,15 @@ func (s *Store) AppendEntry(ctx context.Context, e Entry) (existedAlready bool, 
 		return false, fmt.Errorf("dedupe lookup: %w", err)
 	}
 
-	// Lookup the latest entry_hash to use as previous_hash. FOR UPDATE
-	// guards against concurrent writers; we can't use LIMIT 1 ORDER BY
-	// id DESC + FOR UPDATE on an empty table without a sentinel, so
-	// the empty-chain case falls through with GenesisHash.
+	// Lookup the latest entry_hash to use as previous_hash. The
+	// advisory lock above guarantees we won't race with another
+	// appender. Empty-chain case falls through with GenesisHash.
 	var prev string = chain.GenesisHash
 	row := tx.QueryRow(ctx,
 		`SELECT entry_hash
 		   FROM audit_entries
 		  ORDER BY entry_id DESC
-		  LIMIT 1
-		  FOR UPDATE`)
+		  LIMIT 1`)
 	if err := row.Scan(&prev); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("read prev hash: %w", err)
 	}
@@ -224,7 +277,7 @@ func (s *Store) List(ctx context.Context, p QueryParams) ([]EntryRecord, error) 
 	}
 	sb += ` ORDER BY entry_id ASC LIMIT $2`
 
-	rows, err := s.pool.Query(ctx, sb, args...)
+	rows, err := s.reader.Query(ctx, sb, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -258,7 +311,7 @@ func (s *Store) VerifyRange(ctx context.Context, fromID, toID int64) (*EntryReco
 	if fromID <= 0 {
 		fromID = 1
 	}
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.reader.Query(ctx,
 		`SELECT entry_id, entry_uuid, occurred_at, actor_kind, actor_id,
 		        COALESCE(subject_kind, ''), COALESCE(subject_id, ''),
 		        action, result,
@@ -280,7 +333,7 @@ func (s *Store) VerifyRange(ctx context.Context, fromID, toID int64) (*EntryReco
 	first := fromID == 1
 	if !first {
 		// We need to fetch the hash of the row just before fromID.
-		err := s.pool.QueryRow(ctx,
+		err := s.reader.QueryRow(ctx,
 			`SELECT entry_hash FROM audit_entries WHERE entry_id = $1`, fromID-1,
 		).Scan(&expectedPrev)
 		if err != nil {

@@ -122,6 +122,17 @@ func Emit(ctx context.Context, tx pgx.Tx, e Event) (string, error) {
 		return "", fmt.Errorf("marshal envelope: %w", err)
 	}
 
+	// Envelope shape check against the registered schema. The
+	// validator is installed by the producer's main at startup
+	// (audit.SetDefaultValidator). A nil validator means no check —
+	// preserved for tests and the rare caller that hasn't wired one
+	// up yet. In production every service wires it.
+	if v := DefaultValidator(); v != nil {
+		if err := v.Validate(body); err != nil {
+			return "", fmt.Errorf("audit.Emit (type=%s): %w", e.Type, err)
+		}
+	}
+
 	_, err = tx.Exec(ctx,
 		`INSERT INTO audit_outbox (event_id, payload) VALUES ($1, $2)`,
 		id, body,
@@ -153,6 +164,7 @@ type Worker struct {
 	logger    *slog.Logger
 	writer    *kafka.Writer
 	tickEvery time.Duration
+	producer  string // label for Prometheus metrics (service name)
 
 	// db handle: a small interface so the caller can pass either a
 	// *pgxpool.Pool or a *pgx.Conn (both satisfy Queryer).
@@ -173,12 +185,20 @@ type WorkerConfig struct {
 	KafkaBrokers []string
 	KafkaTopic   string // typically "ug.go.guva.audit.entry.appended.v1"
 	TickEvery    time.Duration
+	// Producer identifies this service in Prometheus metrics (label
+	// value on guva_audit_outbox_unsent_count etc.). Use the bare
+	// service name: "identity", "audit", "apisix-adapter". Defaults
+	// to "unknown" if empty.
+	Producer string
 }
 
 // NewWorker constructs an unstarted Worker. Call Run to start.
 func NewWorker(cfg WorkerConfig) *Worker {
 	if cfg.TickEvery == 0 {
 		cfg.TickEvery = 500 * time.Millisecond
+	}
+	if cfg.Producer == "" {
+		cfg.Producer = "unknown"
 	}
 	w := &kafka.Writer{
 		Addr:         kafka.TCP(cfg.KafkaBrokers...),
@@ -193,6 +213,7 @@ func NewWorker(cfg WorkerConfig) *Worker {
 		logger:    cfg.Logger,
 		writer:    w,
 		tickEvery: cfg.TickEvery,
+		producer:  cfg.Producer,
 		db:        cfg.DB,
 	}
 }
@@ -200,10 +221,17 @@ func NewWorker(cfg WorkerConfig) *Worker {
 // Run blocks until ctx is done. Drains the outbox on every tick.
 func (w *Worker) Run(ctx context.Context) error {
 	w.logger.Info("audit outbox worker starting",
-		"topic", w.writer.Topic, "tick_every", w.tickEvery)
+		"topic", w.writer.Topic, "tick_every", w.tickEvery, "producer", w.producer)
 	t := time.NewTicker(w.tickEvery)
 	defer t.Stop()
 	defer func() { _ = w.writer.Close() }()
+
+	// Seed the gauge so /metrics shows the metric even before the first
+	// tick has a chance to run. Without this, the metric appears only
+	// after a publish, and an absence-looks-like-zero scrape would miss
+	// a stuck Worker on a quiet system.
+	w.updateUnsentGauge(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -211,10 +239,33 @@ func (w *Worker) Run(ctx context.Context) error {
 			return nil
 		case <-t.C:
 			if err := w.drainOnce(ctx); err != nil {
-				w.logger.Error("audit drain tick failed", "error", err)
+				drainErrorCounter.WithLabelValues(w.producer).Inc()
+				w.logger.Error("audit drain tick failed", "error", err, "producer", w.producer)
 			}
+			w.updateUnsentGauge(ctx)
 		}
 	}
+}
+
+// updateUnsentGauge counts current unsent rows and sets the per-producer
+// gauge. On error we leave the gauge at its last value — Prometheus then
+// shows a stale-but-monotonic signal, which is more useful than a sudden
+// drop to zero that would look like recovery.
+func (w *Worker) updateUnsentGauge(ctx context.Context) {
+	rows, err := w.db.Query(ctx,
+		`SELECT COUNT(*) FROM audit_outbox WHERE sent_at IS NULL`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return
+	}
+	var n int64
+	if err := rows.Scan(&n); err != nil {
+		return
+	}
+	unsentGauge.WithLabelValues(w.producer).Set(float64(n))
 }
 
 // drainOnce reads up to 100 unsent rows and publishes them.
@@ -268,6 +319,7 @@ func (w *Worker) drainOnce(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf("mark sent: %w", err)
 	}
-	w.logger.Debug("audit batch published", "count", len(batch))
+	drainCounter.WithLabelValues(w.producer).Inc()
+	w.logger.Debug("audit batch published", "count", len(batch), "producer", w.producer)
 	return nil
 }

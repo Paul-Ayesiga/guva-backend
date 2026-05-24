@@ -1,0 +1,49 @@
+meta {
+  name: 00b Get Admin Token
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{authBaseUrl}}/realms/{{realm}}/protocol/openid-connect/token
+  body: formUrlEncoded
+  auth: none
+}
+
+headers {
+  Content-Type: application/x-www-form-urlencoded
+}
+
+body:form-urlencoded {
+  grant_type: client_credentials
+  client_id: {{adminClientId}}
+  client_secret: {{adminClientSecret}}
+}
+
+docs {
+  Fetches an access token for the platform-admin client
+  (guva-platform-admin). This token carries the admin:* scopes —
+  admin:consumers, admin:scopes, admin:audit, admin:keys, admin:webhooks,
+  plus audit:read — and is required for privileged operations
+  (POST /consumers, GET /audit/export, etc.).
+
+  Stashes the token into `adminAccessToken` so the privileged
+  requests in this collection can `bearer: {{adminAccessToken}}`.
+
+  The consumer-flavoured `guva-reference` token from "00 Get Token"
+  stays in `accessToken` — use whichever matches the endpoint's
+  scope requirements.
+}
+
+script:post-response {
+  if (res.status === 200 && res.body && res.body.access_token) {
+    bru.setEnvVar("adminAccessToken", res.body.access_token);
+  }
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("token has admin:consumers scope", function() {
+    expect(res.body.scope || "").to.include("admin:consumers");
+  });
+}

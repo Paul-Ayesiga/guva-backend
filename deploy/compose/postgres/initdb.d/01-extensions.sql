@@ -35,3 +35,11 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 \connect guva_admin
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+\connect guva_apisix_adapter
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+\connect guva_webhooks
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;

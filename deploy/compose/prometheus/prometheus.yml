@@ -57,3 +57,30 @@ scrape_configs:
         labels:
           service: reference
           component: example
+
+  # Producer services that emit audit events. The audit/* metrics
+  # exported from each tell us whether the audit_outbox drain Worker
+  # is keeping up. See alerts.yml `audit-outbox` group.
+  - job_name: identity
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:7071"]
+        labels:
+          service: identity
+          component: producer
+
+  - job_name: audit
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:7072"]
+        labels:
+          service: audit
+          component: producer
+
+  - job_name: apisix-adapter
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:7073"]
+        labels:
+          service: apisix-adapter
+          component: producer

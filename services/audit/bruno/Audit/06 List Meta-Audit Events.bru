@@ -1,0 +1,46 @@
+meta {
+  name: 06 List Meta-Audit Events
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{apiBaseUrl}}/entries?action=audit.entries.queried&limit=10
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Filters the chain for the meta-audit events that this very service
+  emits whenever its /entries endpoint is read. Running this request
+  also produces another such event (because reads of the audit log
+  are themselves audited), so the count is monotonically non-decreasing
+  on every call.
+
+  Try this:
+    1. Run "02 List Entries (recent)" — note the response count.
+    2. Run this request — at least one entry should now appear with
+       action = audit.entries.queried, actor_id = guva-reference, and
+       detail = { filters, returned, latency_ms }.
+    3. Run this request again — the chain has grown by one more
+       audit.entries.queried (the meta-audit of step 2).
+
+  Swap action=audit.chain.verified to see meta-events from /verify
+  calls; run "05 Verify Chain" first to seed one.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("entries is an array", function() { expect(res.body.entries).to.be.an("array"); });
+  test("every returned entry is meta-audit", function() {
+    res.body.entries.forEach(function(e) {
+      expect(e.action).to.equal("audit.entries.queried");
+      expect(e.actor_kind).to.equal("consumer");
+      expect(e.detail).to.have.property("returned");
+      expect(e.detail).to.have.property("latency_ms");
+    });
+  });
+}

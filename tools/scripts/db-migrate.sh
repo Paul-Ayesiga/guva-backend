@@ -37,7 +37,9 @@ set -a
 source .env
 set +a
 
-DB_NAME="guva_${SERVICE}"
+# Service directories may use kebab-case (e.g. apisix-adapter); Postgres
+# identifiers can't carry unquoted hyphens, so map them to underscores.
+DB_NAME="guva_${SERVICE//-/_}"
 DSN="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${DB_NAME}?sslmode=disable"
 
 command -v migrate >/dev/null || {

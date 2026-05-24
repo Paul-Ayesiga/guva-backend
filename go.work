@@ -3,7 +3,10 @@ go 1.24.0
 use (
 	./pkg/platform
 	./pkg/secrets
+	./services/apisix-adapter
 	./services/audit
 	./services/identity
 	./services/reference
+	./services/webhooks
+	./tools/audit-verify
 )

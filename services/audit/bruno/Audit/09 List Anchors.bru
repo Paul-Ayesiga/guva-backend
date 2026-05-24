@@ -1,0 +1,44 @@
+meta {
+  name: 09 List Anchors
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{apiBaseUrl}}/anchors?limit=10
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Lists Merkle anchors over the chain (newest first). Each anchor is
+  the SHA-256 root of a binary Merkle tree built from a contiguous
+  range of chain entries' entry_hash values.
+
+  The anchor job computes one every AUDIT_ANCHOR_INTERVAL (default
+  5m, set to 5s in dev for fast iteration). Set AUDIT_ANCHOR_WITNESS_URL
+  to POST every new anchor to an external witness.
+
+  Stashes the most recent anchor's id into `{{anchorId}}` so the
+  next requests can use it.
+}
+
+script:post-response {
+  if (res.status === 200 && res.body && res.body.anchors && res.body.anchors.length > 0) {
+    bru.setEnvVar("anchorId", String(res.body.anchors[0].anchor_id));
+  }
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("anchors is an array", function() { expect(res.body.anchors).to.be.an("array"); });
+  test("each anchor has a hex merkle root", function() {
+    res.body.anchors.forEach(function(a) {
+      expect(a.merkle_root).to.match(/^[0-9a-f]{64}$/);
+      expect(a.algorithm).to.equal("sha256-binary-merkle-v1");
+    });
+  });
+}

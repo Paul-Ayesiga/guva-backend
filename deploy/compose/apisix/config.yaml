@@ -54,3 +54,4 @@ plugins:
   - limit-count             # rate limiting (count-based)
   - prometheus              # /apisix/prometheus/metrics
   - opentelemetry           # OTLP traces export
+  - http-logger             # streams access logs to apisix-adapter for audit chaining

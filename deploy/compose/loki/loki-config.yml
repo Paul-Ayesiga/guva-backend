@@ -1,0 +1,59 @@
+# Single-binary Loki for local dev. Filesystem chunks + a single
+# in-process WAL — no S3, no Memcached. Production deployments swap
+# the storage stanza for object storage (S3 / GCS / Azure Blob).
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9095
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+ingester:
+  chunk_idle_period: 5m
+  max_chunk_age: 1h
+  chunk_target_size: 1572864
+  chunk_retain_period: 30s
+
+limits_config:
+  # Dev-friendly: ingest from "the past" without rejection so retroactive
+  # log files (logs already on disk when promtail starts) get picked up.
+  reject_old_samples: false
+  reject_old_samples_max_age: 168h
+  allow_structured_metadata: true
+  volume_enabled: true
+
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: false  # dev: keep everything. Flip + set retention_period in prod.
+
+query_range:
+  align_queries_with_step: true
+
+frontend:
+  max_outstanding_per_tenant: 2048
+
+analytics:
+  reporting_enabled: false

@@ -11,6 +11,15 @@ CREATE DATABASE guva_consent;
 CREATE DATABASE guva_audit;
 CREATE DATABASE guva_notification;
 CREATE DATABASE guva_admin;
+-- Holds the apisix-adapter's audit_outbox; the adapter ingests access
+-- logs from the gateway and stages CloudEvents for the audit chain.
+-- Name mirrors the service directory with hyphens mapped to underscores
+-- (db-migrate.sh does the same).
+CREATE DATABASE guva_apisix_adapter;
+-- Holds the webhooks service: subscription registry + delivery audit
+-- trail. Delivery jobs flow through RabbitMQ; this DB is the source of
+-- truth for "did this consumer get notified about that event".
+CREATE DATABASE guva_webhooks;
 
 -- Keycloak's own backing store.
 CREATE DATABASE keycloak;

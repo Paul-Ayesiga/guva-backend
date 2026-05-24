@@ -1,0 +1,26 @@
+meta {
+  name: 03 Get Subscription
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{apiBaseUrl}}/subscriptions/{{subscriptionId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+docs {
+  Single subscription detail. The secret is never echoed back — only
+  the original 201 response includes it.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("secret is NOT echoed", function() {
+    expect(res.body.secret).to.be.undefined;
+  });
+}

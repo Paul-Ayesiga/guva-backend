@@ -1,0 +1,83 @@
+# Promtail config — two scrape sources:
+#
+#  1. Docker container logs (/var/lib/docker/containers/*/*.log). We
+#     extract the container_name from the docker metadata sidecar file
+#     so labels are friendly ("guva-keycloak" not "abc123def...").
+#  2. Host-side /tmp/*.log files written by `make run-*` workflows.
+#     The host's /tmp is bind-mounted to /host-tmp in the container.
+#
+# Limits to remember: with `external_labels` we keep label cardinality
+# low (job, container, host_log basename). Avoid adding labels per
+# message or you'll blow up Loki's index.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # ---- Docker container logs ---------------------------------------
+  - job_name: docker
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: docker
+          __path__: /var/lib/docker/containers/*/*-json.log
+
+    pipeline_stages:
+      # Each Docker log line is JSON: {"log":"...","stream":"stdout","time":"..."}
+      - json:
+          expressions:
+            output: log
+            stream: stream
+            time: time
+      - timestamp:
+          source: time
+          format: RFC3339Nano
+      - labels:
+          stream: ""
+      - output:
+          source: output
+
+      # Promote the container name out of the Docker per-container
+      # config.v2.json sidecar — promtail's docker SD finds it via the
+      # log path component.
+      - regex:
+          source: filename
+          expression: '/var/lib/docker/containers/(?P<container_id>[^/]+)/'
+      - labels:
+          container_id: ""
+
+  # ---- Host-side /tmp/*.log (make run-* output) --------------------
+  - job_name: host_make_run
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: host
+          __path__: /host-tmp/*.log
+
+    pipeline_stages:
+      # The make-run logs are slog JSON. Surface `level` and `service`
+      # if present so Grafana can filter by them.
+      - json:
+          expressions:
+            level: level
+            service: msg
+            time: time
+      - timestamp:
+          source: time
+          format: RFC3339Nano
+      - labels:
+          level: ""
+      # Filename basename becomes a label: identity.log, audit.log, adapter.log
+      - regex:
+          source: filename
+          expression: '/host-tmp/(?P<run_log>[^/]+)\.log$'
+      - labels:
+          run_log: ""

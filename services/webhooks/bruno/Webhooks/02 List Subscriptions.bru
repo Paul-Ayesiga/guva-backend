@@ -1,0 +1,28 @@
+meta {
+  name: 02 List Subscriptions
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{apiBaseUrl}}/subscriptions
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+docs {
+  Admin callers list all subscriptions. Filter by consumer with
+  `?consumer_id=<id>`. Self-service callers (`webhooks:manage` only)
+  see only their own.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("response shape", function() {
+    expect(res.body.subscriptions).to.be.an("array");
+    expect(res.body.count).to.equal(res.body.subscriptions.length);
+  });
+}

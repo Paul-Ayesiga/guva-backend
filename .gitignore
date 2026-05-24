@@ -58,3 +58,5 @@ venv/
 .cache/
 .tmp/
 tmp/
+.srl
+*.srl
