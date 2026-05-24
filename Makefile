@@ -42,14 +42,33 @@ $(ENV_FILE):
 	@echo "Created $(ENV_FILE) from .env.example"
 
 # ---- Compose stack lifecycle ----------------------------------------------
+#
+# `make up` runs in two phases so Kong's declarative config can be rendered
+# from Keycloak's realm public key (which only exists once Keycloak is up):
+#   1. Bring up every service except Kong; wait for Keycloak to be healthy.
+#   2. Render deploy/compose/kong/kong.yml from kong.yml.tmpl, then start Kong.
+# The render step is idempotent — it skips re-rendering when the output
+# already exists. Use `make refresh-keys` to force after a Keycloak rotation.
+
+KONG_RENDERED := deploy/compose/kong/kong.yml
+BASE_SERVICES := postgres redis kafka apicurio rabbitmq keycloak vault minio jaeger otel-collector prometheus grafana
+
 .PHONY: up
 up: ## Bring up the full local stack (detached).
-	@$(COMPOSE) up -d
+	@$(COMPOSE) up -d --wait $(BASE_SERVICES)
+	@bash tools/scripts/render-kong-config.sh
+	@$(COMPOSE) up -d kong
 	@echo ""
-	@echo "Stack is starting. Run 'make status' to see health, 'make logs' to tail."
+	@echo "Stack is up. Run 'make status' to see health, 'make logs' to tail, 'make urls' for endpoints."
+
+.PHONY: refresh-keys
+refresh-keys: ## Re-render Kong config from Keycloak's current realm key.
+	@bash tools/scripts/render-kong-config.sh --force
+	@$(COMPOSE) restart kong
 
 .PHONY: up-fg
 up-fg: ## Bring up the full local stack in the foreground (Ctrl-C to stop).
+	@bash tools/scripts/render-kong-config.sh || true
 	$(COMPOSE) up
 
 .PHONY: down
@@ -59,7 +78,8 @@ down: ## Stop the stack but keep volumes.
 .PHONY: reset
 reset: ## Stop the stack AND drop all volumes (destructive).
 	@$(COMPOSE) down -v --remove-orphans
-	@echo "Volumes dropped. Run 'make up' to start fresh."
+	@rm -f $(KONG_RENDERED)
+	@echo "Volumes dropped and rendered Kong config removed. Run 'make up' to start fresh."
 
 .PHONY: restart
 restart: down up ## Down then up.

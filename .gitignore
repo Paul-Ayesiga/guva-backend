@@ -28,6 +28,11 @@ coverage.html
 docker-compose.override.yml
 .compose-data/
 
+# Rendered configs that contain values fetched from secret stores
+# (Keycloak realm key, etc). The committed *.tmpl files stay in version
+# control; the rendered output does not.
+deploy/compose/kong/kong.yml
+
 # Logs
 *.log
 logs/

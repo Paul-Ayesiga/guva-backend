@@ -252,10 +252,16 @@ services:
 
   # ---------------------------------------------------------------------------
   # Kong Gateway — API perimeter (§7.2.1, §19.6). Declarative (DB-less) mode.
+  #
+  # Using the fully-free OSS image (`kong/kong`), not the Enterprise build's
+  # free mode (`kong/kong-gateway`). All plugins we rely on (jwt,
+  # rate-limiting, opentelemetry, prometheus, correlation-id) are OSS. The
+  # Enterprise-only `openid-connect` plugin is intentionally not used here;
+  # see DEVELOPMENT.md for the trade-off note.
   # ---------------------------------------------------------------------------
   kong:
     <<: *restart
-    image: kong/kong-gateway:3.9
+    image: kong/kong:3.9
     container_name: guva-kong
     environment:
       KONG_DATABASE: "off"

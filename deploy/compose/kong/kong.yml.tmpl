@@ -1,8 +1,18 @@
 # =============================================================================
-# Kong declarative configuration (DB-less mode) — §7.2.1, §19.6.
-# Starts with a single upstream route to the reference service. As services
-# are added, register them here through pull requests; CI validates the file
-# with `kong config parse`.
+# Kong declarative configuration TEMPLATE (DB-less mode) — §7.2.1, §19.6.
+#
+# This file is committed; the rendered output (deploy/compose/kong/kong.yml)
+# is gitignored. `make refresh-keys` (also run automatically by `make up`
+# when the rendered file is missing) substitutes the placeholders below.
+#
+# Placeholders (each appears verbatim once in this file; the renderer
+# substitutes the FIRST occurrence on its own line):
+#   KEYCLOAK_REALM_PUBKEY_PEM  — RSA public key from Keycloak, formatted
+#                                as a PEM block with 10-space indentation
+#                                to land in the right YAML column.
+#
+# As services are added, register them here through pull requests; CI
+# validates the rendered file with `kong config parse`.
 # =============================================================================
 
 _format_version: "3.0"
@@ -26,14 +36,13 @@ services:
 
 # JWT credentials are pinned per consumer.  The `key` MUST equal the `iss`
 # claim of the token — Keycloak issues iss=http://localhost:8080/realms/guva
-# (the URL the client used to fetch the token).  rsa_public_key comes from
-#   curl -s http://localhost:8080/realms/guva | jq -r .public_key
-# and is wrapped with PEM markers below.
+# (the URL the client used to fetch the token).
 #
-# Caveat: Keycloak rotates realm keys periodically.  When that happens, the
-# JWT plugin starts rejecting fresh tokens — re-run the curl above and
-# replace the rsa_public_key block.  Production deployments use the Kong
-# Enterprise openid-connect plugin (paid licence) which fetches JWKS live.
+# rsa_public_key is rendered at boot from Keycloak's published realm key
+# (see tools/scripts/render-kong-config.sh). The rendered kong.yml is
+# gitignored so the key never reaches version control. Production should
+# fetch JWKS live — feasible via the Kong Enterprise openid-connect plugin
+# (paid) or a small custom plugin.
 consumers:
   - username: guva-reference
     tags: [local, reference]
@@ -41,15 +50,7 @@ consumers:
       - key: http://localhost:8080/realms/guva
         algorithm: RS256
         rsa_public_key: |
-          -----BEGIN PUBLIC KEY-----
-          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArUuTPnKbtf5dhAoH5kXa
-          3RZ4e6l69uJ5Zr5XwPF27RQ42/heM+LsNroeo8xhZjBRVOp6JRKIhqY13TC8msBs
-          HgO4uuUi864piJEd1z6Fm8GkjVVwTItWVTGPn3icF/B8Y/tNEqyrQ4fb8zGYQUIV
-          nWyY4rhaa4R6lpNOFst/GB/Txi8MidUQZXiizggSM+IHFYQGkx0rXz4OJlcEOpQy
-          b9GDNE8Lnbz8ZOxSSxRNjxx0faxjdx1X/82c+DFOEeAGZr9rG7ZOI6MtqUqTe44O
-          qa9NkIn25fWy4iawJc28PJcklSbrLZ1gaRoXCxmVFfFX5f/vZbjnXaxkSI1tkIfp
-          4wIDAQAB
-          -----END PUBLIC KEY-----
+__KEYCLOAK_REALM_PUBKEY_PEM__
 
 plugins:
   - name: correlation-id
