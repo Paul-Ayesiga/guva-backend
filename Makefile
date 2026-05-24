@@ -47,7 +47,7 @@ $(ENV_FILE):
 # be healthy, then starts APISIX. APISIX validates bearer tokens via OIDC
 # discovery against Keycloak (no pinned keys, no rendered config).
 
-BASE_SERVICES := postgres redis kafka apicurio rabbitmq keycloak vault minio jaeger otel-collector prometheus grafana
+BASE_SERVICES := postgres redis kafka apicurio rabbitmq keycloak caddy vault minio jaeger otel-collector prometheus grafana
 
 .PHONY: up
 up: ## Bring up the full local stack (detached), seed Vault, apply migrations.
