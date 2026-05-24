@@ -22,17 +22,19 @@ scrape_configs:
         labels:
           component: otel-collector
 
-  - job_name: kong
-    metrics_path: /metrics
+  - job_name: apisix
+    metrics_path: /apisix/prometheus/metrics
     static_configs:
-      - targets: ["kong:8001"]
+      - targets: ["apisix:9091"]
         labels:
           component: gateway
 
   - job_name: keycloak
+    # Keycloak 25+ exposes /metrics on the management interface
+    # (port 9000 by default), not the main HTTP port.
     metrics_path: /metrics
     static_configs:
-      - targets: ["keycloak:8080"]
+      - targets: ["keycloak:9000"]
         labels:
           component: identity-provider
 

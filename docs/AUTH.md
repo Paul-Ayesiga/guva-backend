@@ -181,19 +181,39 @@ Linux glibc 2.27+ and modern macOS resolve `.localhost` via the system resolver 
 
 ---
 
-## 6. Phase 2 status
+## 6. Observability
 
-| Slice | Goal | Status |
+Auth-specific signals live on a dedicated Grafana dashboard, **GUVA — Auth Overview** (provisioned at boot from `deploy/compose/grafana/dashboards/auth-overview.json`). Open Grafana at <http://localhost:3000> and the dashboard appears under the default folder.
+
+Panels:
+
+| Panel | Metric source | What it tells you |
 |---|---|---|
-| 2.1 | Drop pinned keys; APISIX uses OIDC discovery | ✅ landed in `5e446ac` |
-| **2.2** | **Caddy + `*.localhost` TLS; production-shaped issuer URLs in local** | ✅ **landed in this commit** |
-| 2.3 | Operational runbook + environment migration guide + rollback strategy | ⏳ next |
-| 2.4 | Observability (auth metrics, JWKS refresh dashboards, 401/403 panels) | ⏳ |
-| 2.5 | Security hardening checklist; stricter rate limits on auth-sensitive endpoints | ⏳ |
+| 401 / 403 / total / auth-fail % | `apisix_http_status` | Spike in unauthorised traffic, or a bad credential rollout |
+| Gateway responses by status code | `apisix_http_status` | Status-code timeseries — easy to spot a 5xx storm or 401 cliff |
+| Gateway request latency (p95/p99 by route) | `apisix_http_latency_bucket` | Whether OIDC validation is impacting latency on a specific route |
+| APISIX / Keycloak scrape health | `up{job="…"}` | Distinguishes a real auth incident from a Prometheus-collector outage |
+| Keycloak token issuance rate (by client) | `keycloak_user_logins_total` | Detects unusual issuance patterns per client |
+
+For incident response on any of these signals, see [RUNBOOK-AUTH.md](./RUNBOOK-AUTH.md). The metric names above are exactly what APISIX 3.16 emits at `apisix:9091/apisix/prometheus/metrics`; the scrape config is in `deploy/compose/prometheus/prometheus.yml`.
+
+A natural follow-up (Phase 2.5) is adding **Prometheus alerts** that page when auth-failure share exceeds a threshold sustained over 5 minutes. Deferred until alerting routes are wired up.
 
 ---
 
-## 7. Open questions and follow-ups
+## 7. Phase 2 status
+
+| Slice | Goal | Status |
+|---|---|---|
+| 2.1 | Drop pinned keys; APISIX uses OIDC discovery | ✅ |
+| 2.2 | Caddy + `*.localhost` TLS; production-shaped issuer URLs in local | ✅ |
+| 2.3 | Operational runbook + environment migration guide + rollback strategy | ✅ |
+| **2.4** | **Observability (auth metrics, JWKS refresh dashboards, 401/403 panels)** | ✅ **landed in this commit** |
+| 2.5 | Security hardening checklist; stricter rate limits on auth-sensitive endpoints | ⏳ next |
+
+---
+
+## 8. Open questions and follow-ups
 
 - **Citizen-facing auth code flow** — not implemented; needs PKCE + session handling at APISIX or a dedicated front-end gateway.
 - **`api.guva.localhost`** — currently the API is on `localhost:8000`. Routing it through Caddy at `https://api.guva.localhost` is a small follow-up but means more env var changes; deferred to keep this slice focused.
@@ -203,7 +223,7 @@ Linux glibc 2.27+ and modern macOS resolve `.localhost` via the system resolver 
 
 ---
 
-## 8. Cross-references
+## 9. Cross-references
 
 - [DEVELOPMENT.md](./DEVELOPMENT.md) — developer-facing walkthrough.
 - [../../guva-docs/05-security/10-security-architecture.md](../../guva-docs/05-security/10-security-architecture.md) — platform-wide security architecture.

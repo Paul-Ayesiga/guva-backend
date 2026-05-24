@@ -1,0 +1,396 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Auth-specific signal: token validation outcomes at the gateway, request volume vs. 401/403 rates, upstream latency, Keycloak token-endpoint health. Source metrics: apisix_http_status, apisix_http_latency, keycloak_logins, keycloak_failed_logins. See docs/AUTH.md and docs/RUNBOOK-AUTH.md.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "red", "value": 5}
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "sum(rate(apisix_http_status{code=\"401\"}[5m]))",
+          "legendFormat": "401/s",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "401 rate (last 5m)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.5},
+              {"color": "red", "value": 2}
+            ]
+          },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "sum(rate(apisix_http_status{code=\"403\"}[5m]))",
+          "legendFormat": "403/s",
+          "refId": "A"
+        }
+      ],
+      "title": "403 rate (last 5m)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 50},
+              {"color": "red", "value": 100}
+            ]
+          },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "sum(rate(apisix_http_status[5m]))",
+          "legendFormat": "total/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Total request rate (last 5m)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "red", "value": 25}
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "100 * sum(rate(apisix_http_status{code=~\"401|403\"}[5m])) / clamp_min(sum(rate(apisix_http_status[5m])), 0.001)",
+          "legendFormat": "auth-fail %",
+          "refId": "A"
+        }
+      ],
+      "title": "Auth-failure share of total traffic",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": []},
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 6},
+      "id": 5,
+      "options": {
+        "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "sum by (code) (rate(apisix_http_status[1m]))",
+          "legendFormat": "HTTP {{code}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Gateway responses by status code",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 6},
+      "id": 6,
+      "options": {
+        "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(apisix_http_latency_bucket{type=\"request\"}[5m])))",
+          "legendFormat": "p95 {{route}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le, route) (rate(apisix_http_latency_bucket{type=\"request\"}[5m])))",
+          "legendFormat": "p99 {{route}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Gateway request latency (p95 / p99 by route)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          },
+          "mappings": [
+            {"options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}, "type": "value"}
+          ]
+        }
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 15},
+      "id": 7,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "up{job=\"apisix\"}",
+          "legendFormat": "APISIX",
+          "refId": "A"
+        }
+      ],
+      "title": "APISIX scrape health",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          },
+          "mappings": [
+            {"options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}, "type": "value"}
+          ]
+        }
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 15},
+      "id": 8,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "up{job=\"keycloak\"}",
+          "legendFormat": "Keycloak",
+          "refId": "A"
+        }
+      ],
+      "title": "Keycloak scrape health",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "stacking": {"group": "A", "mode": "none"}
+          },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 15},
+      "id": 9,
+      "options": {
+        "legend": {"calcs": ["mean"], "displayMode": "table", "placement": "right", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
+          "editorMode": "code",
+          "expr": "sum by (client_id) (rate(keycloak_user_logins_total[5m]))",
+          "legendFormat": "{{client_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Keycloak token issuance rate (by client)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["auth", "apisix", "keycloak", "guva"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "GUVA — Auth Overview",
+  "uid": "guva-auth-overview",
+  "version": 1,
+  "weekStart": ""
+}
