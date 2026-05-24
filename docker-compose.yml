@@ -29,6 +29,8 @@ volumes:
   postgres-data:
   redis-data:
   rabbitmq-data:
+  caddy-data:
+  caddy-config:
   keycloak-data:
   minio-data:
   prometheus-data:
@@ -204,19 +206,21 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
       KC_HTTP_ENABLED: "true"
-      # Hostname split horizon (Phase 2.1):
-      #  - Tokens always have iss=http://localhost:8080/realms/guva
-      #    regardless of which network path issued them.
-      #  - Discovery doc keeps `issuer` static (=KC_HOSTNAME).
-      #  - Backchannel endpoints in the discovery doc are derived from
-      #    the request host — so APISIX fetching from inside Docker via
-      #    http://keycloak:8080/realms/guva/.well-known/openid-configuration
-      #    gets back jwks_uri/token_endpoint pointing at keycloak:8080,
-      #    while the issuer stays at localhost:8080 (which matches token
-      #    iss). This removes the need for any pinned key in apisix.yaml.
-      KC_HOSTNAME: http://localhost:8080
+      # Hostname split horizon (Phase 2.2):
+      #  - Canonical URL is https://auth.guva.localhost, fronted by Caddy
+      #    which terminates TLS and proxies to this container on 8080.
+      #  - Tokens always have iss=https://auth.guva.localhost/realms/guva
+      #    (set by KC_HOSTNAME, regardless of which network path issued them).
+      #  - KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true keeps the discovery doc's
+      #    backchannel endpoints (jwks_uri, token_endpoint, …) derived from
+      #    the request host — so APISIX reaching keycloak:8080 in-network
+      #    gets back endpoints it can actually call without TLS or DNS.
+      #  - KC_PROXY=trusted-edge tells Keycloak to honour X-Forwarded-*
+      #    headers from Caddy so its self-redirects use https://.
+      KC_HOSTNAME: https://auth.guva.localhost
       KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_PROXY_HEADERS: "xforwarded"
     depends_on:
       postgres:
         condition: service_healthy
@@ -260,6 +264,35 @@ services:
     healthcheck:
       <<: *hc-defaults
       test: ["CMD", "vault", "status"]
+    networks: [guva]
+
+  # ---------------------------------------------------------------------------
+  # Caddy — local TLS reverse proxy (Phase 2.2).
+  #
+  # Terminates HTTPS at https://auth.guva.localhost so the OIDC handshake
+  # uses production-shaped URLs and Keycloak issues tokens with an
+  # https:// iss claim. Caddy auto-generates a local root CA on first
+  # boot (stored in caddy-data); run `make trust-ca` once on the host to
+  # add it to your system trust store. Containers don't trust the CA —
+  # APISIX talks to Keycloak in-network over plain HTTP via keycloak:8080.
+  # ---------------------------------------------------------------------------
+  caddy:
+    <<: *restart
+    image: caddy:2-alpine
+    container_name: guva-caddy
+    ports:
+      - "443:443"     # primary TLS port; override in compose.override if 443 is taken
+      - "80:80"       # ACME HTTP challenge / convenience redirect
+    volumes:
+      - ./deploy/compose/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data           # holds Caddy's local CA + issued certs
+      - caddy-config:/config
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      <<: *hc-defaults
+      test: ["CMD-SHELL", "wget -q -O- --no-check-certificate https://localhost/ -t 1 -T 3 >/dev/null 2>&1 || nc -z localhost 443"]
     networks: [guva]
 
   # ---------------------------------------------------------------------------

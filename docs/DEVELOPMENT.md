@@ -43,9 +43,15 @@ make bootstrap
 
 # Optional but recommended: install pre-commit hooks.
 pre-commit install
+
+# Bring the stack up so Caddy can generate its local CA, then trust it.
+# This is a one-time step per machine — needed so curl/browsers accept
+# the local https://auth.guva.localhost certificate.
+make up
+make trust-ca           # prompts for sudo to add the cert to your system trust store
 ```
 
-`make bootstrap` is idempotent — re-run it any time you suspect something is off with your local environment.
+`make bootstrap` is idempotent — re-run it any time you suspect something is off with your local environment. `make trust-ca` is one-shot; `make untrust-ca` removes the cert again.
 
 ---
 
@@ -86,7 +92,8 @@ In a third terminal, exercise it. `/ping` requires the `verify:citizen` scope �
 # Easiest path: fetch a token and call it in one go
 make ping
 
-# Or do it manually:
+# Or do it manually. Tokens come from Caddy (TLS) → Keycloak; `make trust-ca`
+# must have been run once first, otherwise curl refuses the cert.
 TOKEN=$(make token)                                               # fetch a JWT
 curl -sH "Authorization: Bearer $TOKEN" \
   localhost:8000/v1/reference/ping | jq                           # through APISIX
@@ -127,9 +134,9 @@ Then open:
 
 - **Jaeger** — <http://localhost:16686>. Select service `reference` and look for the `GET /ping` span.
 - **Grafana** — <http://localhost:3000> (admin/admin). The Prometheus datasource is provisioned; query `up{job="reference"}` to confirm scrape success.
-- **APISIX admin GUI** — <http://localhost:8002>. The `reference` service, route, JWT consumer, and plugins are loaded from declarative config.
+- **APISIX routes** — declared in `deploy/compose/apisix/apisix.yaml`; hot-reloaded on file change. There is no GUI in standalone mode.
 
-> **How the OIDC handshake works (Phase 2.1).** APISIX's `openid-connect` plugin fetches Keycloak's OIDC discovery doc on first use from `http://keycloak:8080/realms/guva/.well-known/openid-configuration` (in-network), parses the JWKS URI from that doc, and caches signing keys for subsequent token validations. Keycloak runs with `KC_HOSTNAME=http://localhost:8080` and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`, which produces a useful split horizon: the discovery doc's `issuer` field stays stable at `http://localhost:8080/realms/guva` (the value clients see in token `iss` claims), while the backchannel endpoint URLs (jwks_uri, token_endpoint, …) are derived from the request host — so APISIX reaches them at `http://keycloak:8080/...` even though the issuer reads as `localhost`. No pinned keys; key rotation is transparent. **Phase 2.2** layers a Caddy reverse proxy and `*.localhost` TLS over the top so dev/staging/prod share an identical issuer + TLS shape.
+The auth architecture is documented separately in [AUTH.md](./AUTH.md) — token flows, issuer URL alignment, JWKS refresh, the cross-environment story. The very short version: tokens come from `https://auth.guva.localhost/realms/guva` (Caddy in front of Keycloak), APISIX validates them via OIDC discovery + JWKS (no pinned keys), and the discovery doc's `issuer` field matches what's in token `iss` claims thanks to `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`.
 
 If all four checks pass, your stack is healthy. Stop the reference service with Ctrl-C.
 
@@ -279,12 +286,12 @@ vault kv get secret/services/reference/config
 
 ### Keycloak
 
-Admin console: <http://localhost:8080> (admin/admin). The `guva` realm is imported on first boot with the scope catalogue and the `guva-reference` client (secret `reference-dev-secret`).
+Admin console: <https://auth.guva.localhost> (admin/admin). After `make trust-ca` the cert is trusted by your browser. The `guva` realm is imported on first boot with the scope catalogue and the `guva-reference` client (secret `reference-dev-secret`). Port 8080 is also exposed for raw-HTTP access (`http://localhost:8080`) — useful when debugging Caddy itself or before `make trust-ca`.
 
-Get a service token:
+Get a service token (use `make token` or the long form):
 
 ```bash
-curl -s -X POST http://localhost:8080/realms/guva/protocol/openid-connect/token \
+curl -s -X POST https://auth.guva.localhost/realms/guva/protocol/openid-connect/token \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d 'grant_type=client_credentials' \
   -d 'client_id=guva-reference' \

@@ -1,0 +1,43 @@
+# =============================================================================
+# Caddy local-development reverse proxy — terminates TLS in front of
+# Keycloak so the OIDC flow uses production-shaped URLs.
+#
+# Caddy auto-generates a local root CA and per-site leaf certs on first
+# start (stored in the caddy-data volume). Install the root CA on your
+# host with `make trust-ca` to drop the "untrusted certificate" warnings.
+# Containers DON'T need to trust the CA: they talk to Keycloak in-network
+# over plain HTTP via http://keycloak:8080.
+#
+# Hostname resolution:
+#   - `*.localhost` is RFC 6761 — your OS resolves it to 127.0.0.1
+#     without /etc/hosts edits. Works out of the box on macOS and most
+#     modern Linux distros (glibc 2.27+ / nss-resolve / systemd-resolved).
+#   - On Windows, add `127.0.0.1 auth.guva.localhost` to hosts. We don't
+#     yet ship native Windows-Docker support.
+# =============================================================================
+
+{
+    # Caddy v2 admin endpoint — kept inside the container only.
+    admin off
+
+    # Logging at INFO so the request path is visible during dev.
+    log {
+        output stdout
+        format console
+        level INFO
+    }
+}
+
+# Keycloak — the auth provider for the platform.
+auth.guva.localhost {
+    encode gzip
+
+    # Caddy adds standard X-Forwarded-* headers automatically; Keycloak's
+    # `KC_HOSTNAME=https://auth.guva.localhost` + KC_PROXY=trusted-edge
+    # (set in docker-compose.yml) makes it trust those headers when
+    # constructing redirect URLs and `iss` claims.
+    reverse_proxy keycloak:8080 {
+        # Preserve the canonical Host so Keycloak knows how it was reached.
+        header_up Host {host}
+    }
+}

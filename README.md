@@ -73,7 +73,9 @@ After `make up`, the following endpoints are reachable on `localhost`:
 |---|---|---|---|
 | APISIX Gateway (proxy) | http://localhost:8000 | — | [§7.2.1](../guva-docs/03-architecture/07-system-architecture.md) |
 | APISIX Prom metrics | http://localhost:9091 | — | [§19.6](../guva-docs/06-infrastructure/19-recommended-tech-stack.md) |
-| Keycloak | http://localhost:8080 | `admin` / `admin` (dev only) | [§7.2.2](../guva-docs/03-architecture/07-system-architecture.md) |
+| Caddy (TLS edge) | https://auth.guva.localhost | — (auto-issued local cert) | run `make trust-ca` once |
+| Keycloak (canonical, via Caddy) | https://auth.guva.localhost | `admin` / `admin` (dev only) | [§7.2.2](../guva-docs/03-architecture/07-system-architecture.md) |
+| Keycloak (raw, debugging) | http://localhost:8080 | `admin` / `admin` (dev only) | bypasses Caddy |
 | Vault UI | http://localhost:8200 | token: `dev-root-token` | [§10.4](../guva-docs/05-security/10-security-architecture.md) |
 | PostgreSQL | localhost:5432 | `guva` / `guva` | [§19.3](../guva-docs/06-infrastructure/19-recommended-tech-stack.md) |
 | Redis | localhost:6379 | — | [§17.2](../guva-docs/03-architecture/17-scalability-strategy.md) |

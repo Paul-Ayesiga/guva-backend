@@ -85,14 +85,60 @@ logs-%: ## Tail logs for a single service, e.g. `make logs-kafka`.
 	@$(COMPOSE) logs -f --tail=200 $*
 
 # ---- Database -------------------------------------------------------------
+KEYCLOAK_URL ?= https://auth.guva.localhost
+CADDY_ROOT_CA = .cache/caddy-root.crt
+
 .PHONY: token
 token: ## Print an OAuth client-credentials access token for guva-reference.
-	@curl -fsS -X POST http://localhost:8080/realms/guva/protocol/openid-connect/token \
+	@response=$$(curl -fsS -X POST $(KEYCLOAK_URL)/realms/guva/protocol/openid-connect/token \
 	  -H 'Content-Type: application/x-www-form-urlencoded' \
 	  -d 'grant_type=client_credentials' \
 	  -d 'client_id=guva-reference' \
-	  -d 'client_secret=reference-dev-secret' \
-	  | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])"
+	  -d 'client_secret=reference-dev-secret' 2>&1) || { \
+	    echo "$$response" | grep -q "certificate" && { \
+	      echo "TLS verification failed. Run 'make trust-ca' once to install Caddy's local root CA." >&2; \
+	      exit 1; \
+	    }; \
+	    echo "$$response" >&2; exit 1; \
+	  }; \
+	echo "$$response" | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])"
+
+.PHONY: trust-ca
+trust-ca: ## Install Caddy's local root CA into your system trust store (one-time).
+	@mkdir -p .cache
+	@docker compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt > $(CADDY_ROOT_CA) 2>/dev/null \
+	  || { echo "Caddy isn't running yet — bring the stack up with 'make up' first."; exit 1; }
+	@echo "==> Extracted Caddy root CA to $(CADDY_ROOT_CA)"
+	@uname=$$(uname -s); \
+	case $$uname in \
+	  Darwin) \
+	    echo "==> Installing into macOS System keychain (will prompt for sudo)"; \
+	    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $(CADDY_ROOT_CA); \
+	    echo "==> Done. Try: curl https://auth.guva.localhost/realms/guva | head"; ;; \
+	  Linux) \
+	    echo "==> Installing into /usr/local/share/ca-certificates/ (will prompt for sudo)"; \
+	    sudo cp $(CADDY_ROOT_CA) /usr/local/share/ca-certificates/caddy-guva-local-root.crt; \
+	    sudo update-ca-certificates; \
+	    echo "==> Done. Try: curl https://auth.guva.localhost/realms/guva | head"; ;; \
+	  *) \
+	    echo "Unknown OS '$$uname'. Manually add $(CADDY_ROOT_CA) to your system trust store."; \
+	    exit 1; ;; \
+	esac
+
+.PHONY: untrust-ca
+untrust-ca: ## Remove Caddy's local root CA from your system trust store.
+	@uname=$$(uname -s); \
+	case $$uname in \
+	  Darwin) \
+	    echo "==> Removing from macOS System keychain (will prompt for sudo)"; \
+	    sudo security delete-certificate -c "Caddy Local Authority - 2025 ECC Root" /Library/Keychains/System.keychain 2>/dev/null \
+	      || echo "    (no matching cert found — already removed?)" ;; \
+	  Linux) \
+	    sudo rm -f /usr/local/share/ca-certificates/caddy-guva-local-root.crt; \
+	    sudo update-ca-certificates --fresh; ;; \
+	  *) \
+	    echo "Unknown OS '$$uname'. Manually remove $(CADDY_ROOT_CA) from your trust store."; ;; \
+	esac
 
 .PHONY: ping
 ping: ## Call /v1/reference/ping through Kong with a fresh token.
@@ -161,7 +207,8 @@ urls: ## Print local service URLs.
 	@printf '%s\n' \
 	  "APISIX proxy      http://localhost:8000  (public gateway)" \
 	  "APISIX metrics    http://localhost:9091/apisix/prometheus/metrics" \
-	  "Keycloak          http://localhost:8080  (admin/admin)" \
+	  "Keycloak (TLS)    https://auth.guva.localhost  (admin/admin) — run 'make trust-ca' once" \
+	  "Keycloak (raw)    http://localhost:8080  (bypasses Caddy; debugging only)" \
 	  "Vault             http://localhost:8200  (token: dev-root-token)" \
 	  "RabbitMQ          http://localhost:15672 (guva/guva)" \
 	  "MinIO console     http://localhost:9001  (guva/guvaguva)" \
