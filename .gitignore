@@ -28,10 +28,10 @@ coverage.html
 docker-compose.override.yml
 .compose-data/
 
-# Rendered configs that contain values fetched from secret stores
-# (Keycloak realm key, etc). The committed *.tmpl files stay in version
-# control; the rendered output does not.
-deploy/compose/apisix/apisix.yaml
+# (Phase 2.1 removed the apisix.yaml rendering — APISIX now validates
+# tokens via OIDC discovery, no pinned key, so apisix.yaml is committed
+# directly. Re-add a gitignore line here if any future config holds a
+# secret that needs to stay out of version control.)
 
 # Logs
 *.log

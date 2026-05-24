@@ -1,0 +1,105 @@
+# =============================================================================
+# APISIX routes / global rules — standalone mode (no etcd, no rendering).
+#
+# Phase 2.1: bearer-token validation is done by the openid-connect plugin
+# against Keycloak via OIDC discovery + JWKS. No pinned keys; APISIX
+# fetches the JWKS on first request and refreshes automatically as keys
+# rotate.
+#
+# How issuer alignment works:
+#   - Keycloak is configured with KC_HOSTNAME=http://localhost:8080 and
+#     KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true (see docker-compose.yml).
+#   - Tokens always carry iss=http://localhost:8080/realms/guva.
+#   - APISIX fetches the discovery doc via the in-network URL
+#     (http://keycloak:8080/realms/guva/.well-known/openid-configuration);
+#     the doc reports issuer=http://localhost:8080/realms/guva (stable
+#     from KC_HOSTNAME) while its endpoint URLs (jwks_uri, etc.) resolve
+#     to keycloak:8080 (dynamic, request-derived).
+#   - The plugin validates token.iss == discovery.issuer → match.
+#
+# APISIX hot-reloads this file on disk change (~1s poll); no restart
+# needed after edits. The trailing #END is required in standalone mode.
+# =============================================================================
+
+routes:
+  - id: reference-public
+    uri: /v1/reference/*
+    methods: [GET, POST]
+    upstream:
+      type: roundrobin
+      pass_host: pass
+      nodes:
+        "host.docker.internal:7070": 1
+      timeout:
+        connect: 5
+        send: 30
+        read: 30
+    plugins:
+      proxy-rewrite:
+        regex_uri: ["^/v1/reference/?(.*)$", "/$1"]
+      openid-connect:
+        # Bearer-token mode: no redirect flow, validate the token only.
+        bearer_only: true
+        use_jwks: true
+        # Discovery URL is reached from inside the docker network; the
+        # discovery doc's `issuer` is what gets validated against the
+        # token's iss claim.
+        discovery: http://keycloak:8080/realms/guva/.well-known/openid-configuration
+        # Required by the plugin schema even in bearer-only mode; treated
+        # as the audience expected in tokens. For client-credentials flow
+        # the JWT's `azp` is checked against client_id.
+        client_id: guva-reference
+        client_secret: reference-dev-secret
+        realm: guva
+        # Forward the original bearer token to the upstream service so it
+        # can read the claims (the reference service already does this
+        # via internal/auth).
+        set_access_token_header: true
+        access_token_in_authorization_header: true
+        # We don't need the userinfo endpoint for client-credentials.
+        set_userinfo_header: false
+        # Strict algorithm allowlist — RS256 is what Keycloak issues.
+        accept_none_alg: false
+        accept_unsupported_alg: false
+      limit-count:
+        count: 600
+        time_window: 60
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+        policy: local
+
+global_rules:
+  - id: 1
+    plugins:
+      request-id:
+        header_name: X-Correlation-Id
+        include_in_response: true
+      prometheus:
+        prefer_name: true
+      opentelemetry:
+        sampler:
+          name: always_on
+
+# Plugin-level runtime metadata. APISIX 3.16's opentelemetry plugin
+# requires plugin_metadata even when global config is set via config.yaml's
+# plugin_attr — without it the plugin logs a warning on every request.
+plugin_metadata:
+  - id: opentelemetry
+    trace_id_source: x-request-id
+    resource:
+      service.name: APISIX
+      service.namespace: guva
+    collector:
+      address: otel-collector:4318
+      request_timeout: 3
+      request_headers:
+        x-source: apisix
+    batch_span_processor:
+      drop_on_queue_full: false
+      max_queue_size: 1024
+      batch_timeout: 2
+      inactive_timeout: 1
+      max_export_batch_size: 16
+
+#END

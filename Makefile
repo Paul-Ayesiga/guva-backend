@@ -43,36 +43,21 @@ $(ENV_FILE):
 
 # ---- Compose stack lifecycle ----------------------------------------------
 #
-# `make up` runs in two phases so APISIX's declarative routes file can be
-# rendered from Keycloak's realm public key (which only exists once
-# Keycloak is up):
-#   1. Bring up every service except APISIX; wait for Keycloak to be
-#      healthy.
-#   2. Render deploy/compose/apisix/apisix.yaml from apisix.yaml.tmpl,
-#      then start APISIX.
-# The render step is idempotent — it skips re-rendering when the output
-# already exists. Use `make refresh-keys` to force after a Keycloak
-# rotation; APISIX hot-reloads the file automatically.
+# `make up` brings up every service except APISIX, waits for Keycloak to
+# be healthy, then starts APISIX. APISIX validates bearer tokens via OIDC
+# discovery against Keycloak (no pinned keys, no rendered config).
 
-GATEWAY_RENDERED := deploy/compose/apisix/apisix.yaml
 BASE_SERVICES := postgres redis kafka apicurio rabbitmq keycloak vault minio jaeger otel-collector prometheus grafana
 
 .PHONY: up
 up: ## Bring up the full local stack (detached).
 	@$(COMPOSE) up -d --wait $(BASE_SERVICES)
-	@bash tools/scripts/render-gateway-config.sh
 	@$(COMPOSE) up -d apisix
 	@echo ""
 	@echo "Stack is up. Run 'make status' to see health, 'make logs' to tail, 'make urls' for endpoints."
 
-.PHONY: refresh-keys
-refresh-keys: ## Re-render APISIX config from Keycloak's current realm key.
-	@bash tools/scripts/render-gateway-config.sh --force
-	@echo "APISIX standalone hot-reloads apisix.yaml within ~1s — no restart needed."
-
 .PHONY: up-fg
 up-fg: ## Bring up the full local stack in the foreground (Ctrl-C to stop).
-	@bash tools/scripts/render-gateway-config.sh || true
 	$(COMPOSE) up
 
 .PHONY: down
@@ -82,8 +67,7 @@ down: ## Stop the stack but keep volumes.
 .PHONY: reset
 reset: ## Stop the stack AND drop all volumes (destructive).
 	@$(COMPOSE) down -v --remove-orphans
-	@rm -f $(GATEWAY_RENDERED)
-	@echo "Volumes dropped and rendered gateway config removed. Run 'make up' to start fresh."
+	@echo "Volumes dropped. Run 'make up' to start fresh."
 
 .PHONY: restart
 restart: down up ## Down then up.

@@ -203,8 +203,20 @@ services:
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-guva}
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
-      KC_HOSTNAME_STRICT: "false"
       KC_HTTP_ENABLED: "true"
+      # Hostname split horizon (Phase 2.1):
+      #  - Tokens always have iss=http://localhost:8080/realms/guva
+      #    regardless of which network path issued them.
+      #  - Discovery doc keeps `issuer` static (=KC_HOSTNAME).
+      #  - Backchannel endpoints in the discovery doc are derived from
+      #    the request host — so APISIX fetching from inside Docker via
+      #    http://keycloak:8080/realms/guva/.well-known/openid-configuration
+      #    gets back jwks_uri/token_endpoint pointing at keycloak:8080,
+      #    while the issuer stays at localhost:8080 (which matches token
+      #    iss). This removes the need for any pinned key in apisix.yaml.
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -274,12 +286,12 @@ services:
     volumes:
       - ./deploy/compose/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
       - ./deploy/compose/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
-    # APISIX doesn't ship a built-in /healthz; any non-connection-error
-    # response from the proxy port means it's alive and routing. We
-    # accept HTTP 404 (no route matches /__healthcheck) as "up".
+    # APISIX has no built-in /healthz and the image ships no curl/wget.
+    # TCP probe on the proxy port via bash's /dev/tcp builtin — if the
+    # port accepts a connection, nginx is up and routing.
     healthcheck:
       <<: *hc-defaults
-      test: ["CMD-SHELL", "curl -sf -o /dev/null -w '%{http_code}' http://localhost:9080/__healthcheck | grep -qE '^(2|4)'"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9080' 2>/dev/null"]
     networks: [guva]
 
   # ---------------------------------------------------------------------------

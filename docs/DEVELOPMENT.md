@@ -57,7 +57,7 @@ make status    # see service health
 make urls      # print the local URLs cheat sheet
 ```
 
-`make up` is two-phase by design: it brings up every service except APISIX and waits for Keycloak to be healthy, then renders APISIX's declarative config from `deploy/compose/apisix/apisix.yaml.tmpl` (substituting the realm public key fetched live from Keycloak), then starts APISIX. The rendered `apisix.yaml` is gitignored — secrets and rotating values never reach version control. APISIX standalone-mode hot-reloads the file within ~1s; `make refresh-keys` forces a re-render after Keycloak rotates its realm key.
+`make up` is two-phase by design: it brings up every service except APISIX and waits for Keycloak to be healthy, then starts APISIX. The split lets APISIX's `openid-connect` plugin reach a live Keycloak for its first JWKS fetch on cold boot. There is **no pinned key in `apisix.yaml`** — the plugin discovers Keycloak's signing keys via OIDC discovery and refreshes them automatically when they rotate.
 
 First boot takes 30–90 seconds depending on machine. Keycloak and APISIX are the slowest; the rest are ready in under 15 seconds.
 
@@ -129,7 +129,7 @@ Then open:
 - **Grafana** — <http://localhost:3000> (admin/admin). The Prometheus datasource is provisioned; query `up{job="reference"}` to confirm scrape success.
 - **APISIX admin GUI** — <http://localhost:8002>. The `reference` service, route, JWT consumer, and plugins are loaded from declarative config.
 
-> **Why the jwt-auth plugin and not openid-connect (for now)?** APISIX's `openid-connect` plugin is fully free and supports JWKS discovery — but using it requires the token's `iss` claim to match what the OIDC discovery doc reports as the issuer. Out of the box, tokens fetched via `localhost:8080` have `iss=http://localhost:8080/realms/guva`, but APISIX inside Docker reaches Keycloak at `http://keycloak:8080` (different host). For Phase 1 we use the OSS `jwt-auth` plugin with a per-consumer public key rendered from `apisix.yaml.tmpl` at boot. **Phase 2 (in flight)** switches to `openid-connect` proper with `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true` so the discovery `issuer` stays stable while internal endpoints stay reachable — and then ultimately moves to a local DNS + TLS layer (e.g. Traefik in front of `*.localhost`) so dev/staging/prod all share the same auth flow.
+> **How the OIDC handshake works (Phase 2.1).** APISIX's `openid-connect` plugin fetches Keycloak's OIDC discovery doc on first use from `http://keycloak:8080/realms/guva/.well-known/openid-configuration` (in-network), parses the JWKS URI from that doc, and caches signing keys for subsequent token validations. Keycloak runs with `KC_HOSTNAME=http://localhost:8080` and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`, which produces a useful split horizon: the discovery doc's `issuer` field stays stable at `http://localhost:8080/realms/guva` (the value clients see in token `iss` claims), while the backchannel endpoint URLs (jwks_uri, token_endpoint, …) are derived from the request host — so APISIX reaches them at `http://keycloak:8080/...` even though the issuer reads as `localhost`. No pinned keys; key rotation is transparent. **Phase 2.2** layers a Caddy reverse proxy and `*.localhost` TLS over the top so dev/staging/prod share an identical issuer + TLS shape.
 
 If all four checks pass, your stack is healthy. Stop the reference service with Ctrl-C.
 

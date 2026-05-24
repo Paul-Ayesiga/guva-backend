@@ -49,8 +49,8 @@ plugin_attr:
 plugins:
   - real-ip                 # honour X-Forwarded-For for source IP
   - request-id              # generates X-Correlation-Id if missing
-  - jwt-auth                # bearer-token validation
+  - openid-connect          # bearer-token validation via OIDC discovery
   - proxy-rewrite           # strip /v1/<service> prefix before upstream
-  - limit-count             # rate limiting (count-based, like Kong's)
+  - limit-count             # rate limiting (count-based)
   - prometheus              # /apisix/prometheus/metrics
   - opentelemetry           # OTLP traces export
