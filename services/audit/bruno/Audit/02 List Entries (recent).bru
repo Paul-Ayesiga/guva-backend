@@ -1,0 +1,39 @@
+meta {
+  name: 02 List Entries (recent)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{apiBaseUrl}}/entries?limit=20
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Reads the most recent 20 entries via the gateway. Stashes the last
+  entry's id into `{{lastCursor}}` so the next request can paginate.
+}
+
+script:post-response {
+  if (res.status === 200 && res.body && res.body.next_cursor) {
+    bru.setEnvVar("lastCursor", String(res.body.next_cursor));
+  }
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("entries is an array", function() { expect(res.body.entries).to.be.an("array"); });
+  test("count matches entries length", function() {
+    expect(res.body.count).to.equal(res.body.entries.length);
+  });
+  test("every entry has a hash chain", function() {
+    res.body.entries.forEach(function(e) {
+      expect(e.previous_hash).to.match(/^[0-9a-f]{64}$/);
+      expect(e.entry_hash).to.match(/^[0-9a-f]{64}$/);
+    });
+  });
+}

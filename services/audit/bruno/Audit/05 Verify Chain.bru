@@ -1,0 +1,29 @@
+meta {
+  name: 05 Verify Chain
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{apiBaseUrl}}/verify
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Walks the whole chain end-to-end. Returns {"ok": true} if every
+  entry hashes correctly and its previous_hash matches the prior
+  row's entry_hash. Returns {"ok": false, "broken_at": ..., ...}
+  on the first break.
+
+  This is the assertion the platform makes to auditors: "no row
+  has been silently modified or inserted out of order."
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("chain is intact", function() { expect(res.body.ok).to.equal(true); });
+}

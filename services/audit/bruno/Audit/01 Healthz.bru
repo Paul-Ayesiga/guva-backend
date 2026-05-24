@@ -1,0 +1,14 @@
+meta {
+  name: 01 Healthz
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{directBaseUrl}}/healthz
+  auth: none
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+}

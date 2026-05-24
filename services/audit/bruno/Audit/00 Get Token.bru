@@ -1,0 +1,32 @@
+meta {
+  name: 00 Get Token
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{authBaseUrl}}/realms/{{realm}}/protocol/openid-connect/token
+  body: formUrlEncoded
+  auth: none
+}
+
+headers {
+  Content-Type: application/x-www-form-urlencoded
+}
+
+body:form-urlencoded {
+  grant_type: client_credentials
+  client_id: {{clientId}}
+  client_secret: {{clientSecret}}
+}
+
+script:post-response {
+  if (res.status === 200 && res.body && res.body.access_token) {
+    bru.setEnvVar("accessToken", res.body.access_token);
+  }
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("access_token returned", function() { expect(res.body.access_token).to.be.a("string"); });
+}

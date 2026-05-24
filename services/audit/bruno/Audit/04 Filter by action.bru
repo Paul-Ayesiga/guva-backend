@@ -1,0 +1,28 @@
+meta {
+  name: 04 Filter by action
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{apiBaseUrl}}/entries?action=identity.consumer.created&limit=20
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Filters by a specific action. Run identity's "Create Consumer" Bruno
+  request first to populate some entries.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("all entries match the action filter", function() {
+    res.body.entries.forEach(function(e) {
+      expect(e.action).to.equal("identity.consumer.created");
+    });
+  });
+}

@@ -1,0 +1,28 @@
+meta {
+  name: 03 List Entries (paginate)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{apiBaseUrl}}/entries?after={{lastCursor}}&limit=20
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Continues the cursor from request 02. Run 02 first.
+}
+
+script:post-response {
+  if (res.status === 200 && res.body && res.body.next_cursor) {
+    bru.setEnvVar("lastCursor", String(res.body.next_cursor));
+  }
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+}

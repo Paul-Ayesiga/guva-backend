@@ -1,0 +1,210 @@
+openapi: 3.1.0
+info:
+  title: GUVA Audit Service
+  version: 0.1.0
+  description: |
+    Append-only, hash-chained audit ledger for every action that affects the security
+    or integrity of the GUVA platform.
+
+    **Reads only.** Writes happen via Kafka — producers emit `audit.entry.appended.v1`
+    events on `ug.go.guva.audit.entry.appended.v1`, and this service is the sole writer
+    to the chain. See [pkg/platform/audit](../../pkg/platform/audit) for the producer
+    library that every service uses.
+
+    ## Chain invariant
+
+    For every entry `n`: `entry_hash = SHA256(canonical_row || previous_hash)`.
+    `previous_hash` of entry 1 is the literal 64-zero string (genesis). Modification of
+    any past entry breaks every subsequent hash. Append-only is also enforced at the
+    DB layer: `BEFORE UPDATE OR DELETE` triggers `RAISE EXCEPTION`.
+
+    ## Authentication
+
+    Bearer JWT, gated by the `audit:read` scope.
+
+servers:
+  - url: http://localhost:8000/v1/audit
+    description: Local — via APISIX gateway (recommended)
+  - url: http://localhost:7072
+    description: Local — direct to the service (bypasses gateway; dev only)
+  - url: https://api.guva.go.ug/v1/audit
+    description: Production
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: read
+    description: Cursor-paginated query over the audit chain.
+  - name: integrity
+    description: Recompute and verify the chain end-to-end.
+  - name: probes
+    description: Liveness and readiness, for orchestrators only.
+
+paths:
+
+  /healthz:
+    get:
+      tags: [probes]
+      summary: Liveness
+      security: []
+      responses:
+        "200": { description: alive }
+
+  /readyz:
+    get:
+      tags: [probes]
+      summary: Readiness
+      security: []
+      responses:
+        "200": { description: ready }
+        "503": { description: not ready }
+
+  /entries:
+    get:
+      tags: [read]
+      summary: List audit entries (cursor pagination + filters)
+      parameters:
+        - in: query
+          name: after
+          description: Entry id cursor; returns rows with entry_id > after.
+          schema: { type: integer, format: int64, default: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100, maximum: 500 }
+        - in: query
+          name: actor_id
+          schema: { type: string }
+        - in: query
+          name: subject_id
+          schema: { type: string }
+        - in: query
+          name: action
+          schema: { type: string, example: "identity.consumer.created" }
+        - in: query
+          name: result
+          schema: { type: string, enum: [ok, denied, error, inconclusive] }
+        - in: query
+          name: from
+          description: Inclusive lower bound on occurred_at (RFC 3339).
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          description: Exclusive upper bound on occurred_at (RFC 3339).
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Page of entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries, count, next_cursor]
+                properties:
+                  entries:
+                    type: array
+                    items: { $ref: '#/components/schemas/Entry' }
+                  count: { type: integer }
+                  next_cursor:
+                    type: integer
+                    format: int64
+                    description: Pass as `after` on the next request; 0 means no more rows.
+              examples:
+                default:
+                  value:
+                    count: 1
+                    next_cursor: 5
+                    entries:
+                      - entry_id: 5
+                        entry_uuid: "0ad6b85b-1971-0c9e-aaaa-bbbbbbbbbbbb"
+                        occurred_at: "2026-05-24T18:00:00.000Z"
+                        actor_kind: "service"
+                        actor_id: "identity"
+                        subject_kind: "consumer"
+                        subject_id: "acacia-onboarding"
+                        action: "identity.consumer.created"
+                        result: "ok"
+                        correlation_id: "9369c308-d96d-4905-9096-f369161cdb77"
+                        detail: { agency_name: "Acacia", consumer_id: "..." }
+                        previous_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+                        entry_hash:    "0ad6b85b19710c9e..."
+        "401": { description: missing or invalid bearer token }
+        "403": { description: token does not carry audit:read }
+        "400": { description: malformed filter }
+
+  /verify:
+    get:
+      tags: [integrity]
+      summary: Walk the chain and verify hash integrity
+      description: |
+        Recomputes the hash for every entry in the range and checks the
+        previous_hash linkage. Use to prove that a snapshot has not been
+        tampered with. The walk stops at the first break.
+      parameters:
+        - in: query
+          name: from_id
+          schema: { type: integer, format: int64, default: 1 }
+        - in: query
+          name: to_id
+          description: Pass 0 (or omit) to walk to the end of the chain.
+          schema: { type: integer, format: int64, default: 0 }
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      ok:      { type: boolean, enum: [true] }
+                      from_id: { type: integer, format: int64 }
+                      to_id:   { type: integer, format: int64 }
+                  - type: object
+                    properties:
+                      ok:          { type: boolean, enum: [false] }
+                      broken_at:   { type: integer, format: int64 }
+                      broken_uuid: { type: string }
+                      detail:      { type: string }
+              examples:
+                ok:
+                  value: { ok: true, from_id: 1, to_id: 100 }
+                broken:
+                  value: { ok: false, broken_at: 42, broken_uuid: "abc...", detail: "previous_hash mismatch" }
+        "401": { description: missing or invalid bearer token }
+        "403": { description: token does not carry audit:read }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Entry:
+      type: object
+      required: [entry_id, entry_uuid, occurred_at, actor_kind, actor_id,
+                 action, result, previous_hash, entry_hash]
+      properties:
+        entry_id:       { type: integer, format: int64 }
+        entry_uuid:     { type: string, format: uuid }
+        occurred_at:    { type: string, format: date-time }
+        actor_kind:     { type: string, example: "service" }
+        actor_id:       { type: string, example: "identity" }
+        subject_kind:   { type: string }
+        subject_id:     { type: string }
+        action:         { type: string, example: "identity.consumer.created" }
+        result:         { type: string, enum: [ok, denied, error, inconclusive] }
+        correlation_id: { type: string, format: uuid }
+        detail:
+          description: Service-defined; small, stable JSON.
+          oneOf:
+            - type: object
+            - type: array
+            - type: string
+            - type: number
+            - type: boolean
+            - type: 'null'
+        previous_hash:  { type: string, description: "Hex SHA-256; 64 zeros for the first entry" }
+        entry_hash:     { type: string, description: "Hex SHA-256 of canonical(row || previous_hash)" }
