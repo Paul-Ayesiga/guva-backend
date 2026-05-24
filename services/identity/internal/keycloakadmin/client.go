@@ -187,6 +187,40 @@ func (c *Client) CreateConfidentialClient(ctx context.Context, req CreateClientR
 	}, nil
 }
 
+// DeleteClient removes a client from the realm by its internal UUID.
+// Used as the compensating action when our own persistence fails after
+// a successful CreateConfidentialClient — without this we leave orphan
+// clients behind in Keycloak that no one knows about.
+//
+// Returns nil for "client doesn't exist" (404) so callers can use this
+// as a best-effort cleanup without special-casing.
+func (c *Client) DeleteClient(ctx context.Context, internalID string) error {
+	token, err := c.adminToken(ctx)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s", c.cfg.BaseURL, c.cfg.Realm, internalID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete client: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusNotFound:
+		return nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return ErrAdminCredentials
+	default:
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("%w: %s: %s", ErrUnknownAdminError, resp.Status, strings.TrimSpace(string(body)))
+	}
+}
+
 // fetchClientSecret pulls the generated secret for a freshly created
 // client. The realm endpoint is /admin/realms/{realm}/clients/{id}/client-secret.
 func (c *Client) fetchClientSecret(ctx context.Context, adminToken, internalID string) (string, error) {

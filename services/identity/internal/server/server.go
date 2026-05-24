@@ -11,6 +11,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -168,17 +169,31 @@ func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadm
 			CreatedAt:        time.Now().UTC(),
 		}
 		if err := st.CreateConsumer(r.Context(), reg); err != nil {
-			// The Keycloak client now exists but we couldn't record it.
-			// Log loud so an operator can manually reconcile; the next
-			// iteration is to also delete the Keycloak client on this
-			// branch (compensating action).
-			logger.ErrorContext(r.Context(), "persist consumer failed AFTER keycloak client created — RECONCILE REQUIRED",
-				"keycloak_internal_id", kcResult.InternalID,
-				"keycloak_client_id", kcResult.ClientID,
-				"error", err,
-			)
+			// Compensating delete — the Keycloak client now exists but
+			// our DB rejected the registration. Roll back so we don't
+			// leave an orphaned client in Keycloak with no audit trail.
+			//
+			// We use a fresh context with a short timeout because the
+			// caller's context might already be on the way out (the
+			// failed Postgres call could have been a context deadline).
+			compCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if delErr := kc.DeleteClient(compCtx, kcResult.InternalID); delErr != nil {
+				logger.ErrorContext(r.Context(), "compensating delete failed — RECONCILE REQUIRED",
+					"keycloak_internal_id", kcResult.InternalID,
+					"keycloak_client_id", kcResult.ClientID,
+					"persist_error", err,
+					"delete_error", delErr,
+				)
+			} else {
+				logger.WarnContext(r.Context(), "compensating delete succeeded",
+					"keycloak_internal_id", kcResult.InternalID,
+					"keycloak_client_id", kcResult.ClientID,
+					"persist_error", err,
+				)
+			}
 			problem.Write(w, http.StatusInternalServerError, "internal_error",
-				"client created in Keycloak but registration could not be persisted")
+				"failed to persist registration; the Keycloak client was rolled back")
 			return
 		}
 
