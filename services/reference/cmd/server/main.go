@@ -17,6 +17,7 @@ import (
 
 	"github.com/guva-ug/guva-backend/pkg/platform/health"
 	"github.com/guva-ug/guva-backend/pkg/platform/observability"
+	"github.com/guva-ug/guva-backend/pkg/secrets"
 	"github.com/guva-ug/guva-backend/services/reference/internal/config"
 	"github.com/guva-ug/guva-backend/services/reference/internal/server"
 )
@@ -49,10 +50,28 @@ func main() {
 		_ = shutdownTracing(shutdownCtx)
 	}()
 
-	probes := health.New()
-	probes.MarkReady() // Nothing to wait on in this skeleton.
+	// Fetch the greeting from Vault. Demonstrates the pattern every
+	// future service uses: env tells us where Vault is and which token
+	// to use; Vault answers what's actually in our config. Service is
+	// "not ready" until the secret resolves.
+	vault, err := secrets.NewClient(secrets.Config{Addr: cfg.VaultAddr, Token: cfg.VaultToken})
+	if err != nil {
+		logger.Error("vault client init failed", "error", err)
+		os.Exit(1)
+	}
+	fetchCtx, cancelFetch := context.WithTimeout(ctx, 10*time.Second)
+	greeting, err := vault.GetString(fetchCtx, "services/reference/config", "greeting")
+	cancelFetch()
+	if err != nil {
+		logger.Error("vault fetch failed", "path", "services/reference/config", "key", "greeting", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("loaded service config from vault", "greeting_chars", len(greeting))
 
-	srv := server.New(cfg, logger, probes)
+	probes := health.New()
+	probes.MarkReady() // Secrets resolved; nothing else to wait on in this skeleton.
+
+	srv := server.New(cfg, server.ServiceConfig{Greeting: greeting}, logger, probes)
 
 	go func() {
 		logger.Info("reference service listening", "addr", cfg.HTTPAddr)

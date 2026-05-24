@@ -18,6 +18,9 @@ type Config struct {
 
 	OTLPEndpoint string
 	Environment  string
+
+	VaultAddr  string
+	VaultToken string
 }
 
 func Load() (Config, error) {
@@ -26,6 +29,8 @@ func Load() (Config, error) {
 		HTTPAddr:     envOr("REFERENCE_HTTP_ADDR", ":7070"),
 		OTLPEndpoint: envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
 		Environment:  envOr("OTEL_SERVICE_NAMESPACE", "local"),
+		VaultAddr:    envOr("VAULT_ADDR", "http://localhost:8200"),
+		VaultToken:   envOr("VAULT_TOKEN", "dev-root-token"),
 	}
 
 	level, err := parseLevel(envOr("REFERENCE_LOG_LEVEL", "info"))

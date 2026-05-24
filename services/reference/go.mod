@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/guva-ug/guva-backend/pkg/platform v0.0.0-00010101000000-000000000000
+	github.com/guva-ug/guva-backend/pkg/secrets v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.20.4
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.55.0
 )
@@ -38,6 +39,8 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 )
 
-// Resolved from the workspace at go.work; for production this will be
-// replaced by a real version pin once we publish the platform module.
+// Resolved from the workspace at go.work; for production these will be
+// replaced by real version pins once we publish the platform/secrets modules.
 replace github.com/guva-ug/guva-backend/pkg/platform => ../../pkg/platform
+
+replace github.com/guva-ug/guva-backend/pkg/secrets => ../../pkg/secrets

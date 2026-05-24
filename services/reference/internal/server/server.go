@@ -23,10 +23,16 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
+// ServiceConfig is the small bundle of values main() resolves at startup
+// (some from env, some from Vault) and passes through to the HTTP layer.
+type ServiceConfig struct {
+	Greeting string // from Vault: secret/services/reference/config:greeting
+}
+
 // New returns the reference service's *http.Server, wired up with
 // health probes, Prometheus metrics, and the /ping business endpoint
 // (gated by the verify:citizen scope).
-func New(cfg config.Config, logger *slog.Logger, probes *health.Probes) *http.Server {
+func New(cfg config.Config, svcCfg ServiceConfig, logger *slog.Logger, probes *health.Probes) *http.Server {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		collectors.NewGoCollector(),
@@ -37,14 +43,14 @@ func New(cfg config.Config, logger *slog.Logger, probes *health.Probes) *http.Se
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 
 	ping := auth.RequireScope("verify:citizen",
-		otelhttp.NewHandler(pingHandler(cfg, logger), "GET /ping"))
+		otelhttp.NewHandler(pingHandler(cfg, svcCfg, logger), "GET /ping"))
 	mux.Handle("/ping", ping)
 	mux.Handle("/v1/ping", ping) // legacy alias
 
 	return httpserver.New(httpserver.Config{Addr: cfg.HTTPAddr}, probes, mux)
 }
 
-func pingHandler(cfg config.Config, logger *slog.Logger) http.Handler {
+func pingHandler(cfg config.Config, svcCfg ServiceConfig, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims, _ := auth.FromContext(r.Context())
 		logger.InfoContext(r.Context(), "ping",
@@ -56,6 +62,7 @@ func pingHandler(cfg config.Config, logger *slog.Logger) http.Handler {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"service":     cfg.ServiceName,
 			"environment": cfg.Environment,
+			"greeting":    svcCfg.Greeting,
 			"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
 			"caller": map[string]any{
 				"client":  claims.ClientID,

@@ -52,9 +52,14 @@ BASE_SERVICES := postgres redis kafka apicurio rabbitmq keycloak vault minio jae
 .PHONY: up
 up: ## Bring up the full local stack (detached).
 	@$(COMPOSE) up -d --wait $(BASE_SERVICES)
+	@bash tools/scripts/seed-vault.sh
 	@$(COMPOSE) up -d apisix
 	@echo ""
 	@echo "Stack is up. Run 'make status' to see health, 'make logs' to tail, 'make urls' for endpoints."
+
+.PHONY: seed-vault
+seed-vault: ## Re-seed Vault with the dev secrets every service needs at startup.
+	@bash tools/scripts/seed-vault.sh
 
 .PHONY: up-fg
 up-fg: ## Bring up the full local stack in the foreground (Ctrl-C to stop).
