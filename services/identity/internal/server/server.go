@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,11 +39,11 @@ type Scope struct {
 	Category    string `json:"category"`
 }
 
-// scopeCatalogue is the authoritative list returned by GET /scopes.
-// Mirrors what's in deploy/compose/keycloak/realm-export.json
-// (clientScopes block). Keeping it in code lets us evolve the contract
-// without round-tripping through Keycloak; a future iteration syncs.
-var scopeCatalogue = []Scope{
+// scopeCatalogueFallback is the baseline list used when Keycloak is
+// unreachable on the first request (no cache yet). After the first
+// successful Keycloak fetch the cache wins; this only matters at
+// cold-boot when the IdP is also down.
+var scopeCatalogueFallback = []Scope{
 	{Name: "verify:citizen", Description: "Verify citizen identity attributes", Category: "verification"},
 	{Name: "verify:business", Description: "Verify business registration and status", Category: "verification"},
 	{Name: "verify:tax", Description: "Verify tax identification and compliance", Category: "verification"},
@@ -56,16 +57,108 @@ var scopeCatalogue = []Scope{
 	{Name: "admin:consumers", Description: "Administer consumer registrations", Category: "admin"},
 }
 
+// scopeCache caches Keycloak's client-scope list with TTL. Thread-safe;
+// on Keycloak error returns stale data when available, otherwise the
+// fallback list. The TTL is short (60s) because scope changes are rare
+// but should propagate quickly when they happen.
+type scopeCache struct {
+	kc      *keycloakadmin.Client
+	logger  *slog.Logger
+	ttl     time.Duration
+	mu      sync.RWMutex
+	value   []Scope
+	expires time.Time
+}
+
+func newScopeCache(kc *keycloakadmin.Client, logger *slog.Logger) *scopeCache {
+	return &scopeCache{kc: kc, logger: logger, ttl: 60 * time.Second}
+}
+
+// Get returns the current scope catalogue. Refreshes from Keycloak if
+// the cache is empty or expired. Serves stale on Keycloak error rather
+// than failing the request; falls back to the baseline list only when
+// nothing has ever been cached.
+func (s *scopeCache) Get(ctx context.Context) []Scope {
+	s.mu.RLock()
+	if len(s.value) > 0 && time.Now().Before(s.expires) {
+		v := s.value
+		s.mu.RUnlock()
+		return v
+	}
+	s.mu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Re-check after acquiring the write lock — another goroutine may
+	// have refreshed in the meantime.
+	if len(s.value) > 0 && time.Now().Before(s.expires) {
+		return s.value
+	}
+
+	raw, err := s.kc.ListClientScopes(ctx)
+	if err != nil {
+		s.logger.WarnContext(ctx, "scope catalogue refresh failed; serving stale or fallback",
+			"have_cached", len(s.value) > 0, "error", err)
+		if len(s.value) > 0 {
+			return s.value
+		}
+		return scopeCatalogueFallback
+	}
+
+	out := make([]Scope, 0, len(raw))
+	for _, r := range raw {
+		// Filter out OpenID-Connect built-ins; our convention is that
+		// platform scopes always contain `:`.
+		if !strings.Contains(r.Name, ":") {
+			continue
+		}
+		out = append(out, Scope{
+			Name:        r.Name,
+			Description: r.Description,
+			Category:    deriveCategory(r.Name),
+		})
+	}
+	s.value = out
+	s.expires = time.Now().Add(s.ttl)
+	return s.value
+}
+
+// deriveCategory pulls the category from the scope-name prefix
+// (`verify:citizen` → `verification`). Keeping this here rather than
+// in Keycloak lets us evolve the categorisation without an IdP change.
+func deriveCategory(name string) string {
+	prefix := name
+	if i := strings.Index(name, ":"); i > 0 {
+		prefix = name[:i]
+	}
+	switch prefix {
+	case "verify":
+		return "verification"
+	case "consent":
+		return "consent"
+	case "audit":
+		return "audit"
+	case "webhooks":
+		return "delivery"
+	case "admin":
+		return "admin"
+	default:
+		return "other"
+	}
+}
+
 // New returns the identity service's *http.Server.
 func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *store.Store, kc *keycloakadmin.Client) *http.Server {
 	mux := http.NewServeMux()
+
+	cache := newScopeCache(kc, logger)
 
 	// Read endpoints — protected by audit:read (a read-only scope that
 	// guva-reference happens to carry, so we can demo the flow with the
 	// existing dev client). In production this would be admin:consumers
 	// or a dedicated identity:read scope.
 	scopes := auth.RequireScope("audit:read",
-		otelhttp.NewHandler(scopesHandler(logger), "GET /scopes"))
+		otelhttp.NewHandler(scopesHandler(logger, cache), "GET /scopes"))
 	mux.Handle("GET /scopes", scopes)
 
 	consumersGet := auth.RequireScope("audit:read",
@@ -82,17 +175,19 @@ func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *stor
 	return httpserver.New(httpserver.Config{Addr: cfg.HTTPAddr}, probes, mux)
 }
 
-func scopesHandler(logger *slog.Logger) http.Handler {
+func scopesHandler(logger *slog.Logger, cache *scopeCache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims, _ := auth.FromContext(r.Context())
+		scopes := cache.Get(r.Context())
 		logger.InfoContext(r.Context(), "scopes.list",
 			"correlation_id", r.Header.Get("X-Correlation-Id"),
 			"caller_client", claims.ClientID,
+			"count", len(scopes),
 		)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"scopes": scopeCatalogue,
-			"count":  len(scopeCatalogue),
+			"scopes": scopes,
+			"count":  len(scopes),
 		})
 	})
 }

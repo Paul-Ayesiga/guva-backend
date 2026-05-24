@@ -187,6 +187,46 @@ func (c *Client) CreateConfidentialClient(ctx context.Context, req CreateClientR
 	}, nil
 }
 
+// ClientScope is the Keycloak ClientScopeRepresentation, trimmed to the
+// fields we use.
+type ClientScope struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Protocol    string `json:"protocol"`
+}
+
+// ListClientScopes returns every client-scope in the realm. Keycloak
+// includes both our platform scopes (`verify:citizen`, `audit:read`, …)
+// and built-in OpenID Connect ones (`profile`, `email`, `openid`, …);
+// the caller filters as needed.
+func (c *Client) ListClientScopes(ctx context.Context) ([]ClientScope, error) {
+	token, err := c.adminToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/admin/realms/%s/client-scopes", c.cfg.BaseURL, c.cfg.Realm)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list client-scopes: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("list client-scopes: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var scopes []ClientScope
+	if err := json.NewDecoder(resp.Body).Decode(&scopes); err != nil {
+		return nil, fmt.Errorf("decode client-scopes: %w", err)
+	}
+	return scopes, nil
+}
+
 // DeleteClient removes a client from the realm by its internal UUID.
 // Used as the compensating action when our own persistence fails after
 // a successful CreateConfidentialClient — without this we leave orphan
