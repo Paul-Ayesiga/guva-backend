@@ -39,6 +39,10 @@ type Config struct {
 	// on the host).
 	KeycloakBackendURL string
 	KeycloakRealm      string
+
+	// Audit emission
+	KafkaBrokers    []string
+	KafkaAuditTopic string
 }
 
 func Load() (Config, error) {
@@ -56,6 +60,8 @@ func Load() (Config, error) {
 		DBSSLMode:          envOr("DB_SSLMODE", "disable"),
 		KeycloakBackendURL: envOr("KEYCLOAK_BACKEND_URL", "http://localhost:8080"),
 		KeycloakRealm:      envOr("KEYCLOAK_REALM", "guva"),
+		KafkaBrokers:       splitCSV(envOr("KAFKA_BROKERS", "localhost:9094")),
+		KafkaAuditTopic:    envOr("KAFKA_AUDIT_TOPIC", "ug.go.guva.audit.entry.appended.v1"),
 	}
 
 	level, err := parseLevel(envOr("IDENTITY_LOG_LEVEL", "info"))
@@ -81,6 +87,17 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func parseLevel(s string) (slog.Level, error) {

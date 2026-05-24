@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/guva-ug/guva-backend/pkg/platform/audit"
 	"github.com/guva-ug/guva-backend/pkg/platform/health"
 	"github.com/guva-ug/guva-backend/pkg/platform/observability"
 	"github.com/guva-ug/guva-backend/pkg/secrets"
@@ -118,11 +119,29 @@ func main() {
 
 	srv := server.New(cfg, logger, probes, st, kcAdmin, vault)
 
+	// Audit drain worker — tails audit_outbox and publishes to Kafka.
+	// Events are emitted from inside business transactions via
+	// audit.Emit(ctx, tx, event); the worker turns those local writes
+	// into messages on the audit topic without ever blocking the
+	// handler that produced them.
+	auditWorker := audit.NewWorker(audit.WorkerConfig{
+		DB:           st.Pool(),
+		Logger:       logger,
+		KafkaBrokers: cfg.KafkaBrokers,
+		KafkaTopic:   cfg.KafkaAuditTopic,
+	})
+
 	go func() {
 		logger.Info("identity service listening", "addr", cfg.HTTPAddr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server failed", "error", err)
 			cancel()
+		}
+	}()
+
+	go func() {
+		if err := auditWorker.Run(ctx); err != nil {
+			logger.Error("audit worker exited with error", "error", err)
 		}
 	}()
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -49,6 +50,11 @@ func (s *Store) Close() {
 	}
 }
 
+// Pool returns the underlying connection pool. Handlers that need to
+// run multiple operations in one transaction (e.g. INSERT consumer +
+// INSERT audit_outbox via pkg/platform/audit.Emit) reach for this.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
 // ConsumerRegistration is the data carried by /consumers endpoints.
 // This is the audit/intent record kept on our side; the corresponding
 // Keycloak client is the source of truth for credentials and scopes.
@@ -77,7 +83,24 @@ func (s *Store) CountConsumers(ctx context.Context) (int64, error) {
 // the handler return the resource location immediately without a second
 // round-trip.
 func (s *Store) CreateConsumer(ctx context.Context, c ConsumerRegistration) error {
-	_, err := s.pool.Exec(ctx,
+	return s.createConsumerOn(ctx, s.pool, c)
+}
+
+// CreateConsumerTx is CreateConsumer in an existing transaction. Used
+// when the handler also wants to write an audit_outbox row in the same
+// atomic step (so business write + audit intent commit together).
+func (s *Store) CreateConsumerTx(ctx context.Context, tx pgx.Tx, c ConsumerRegistration) error {
+	return s.createConsumerOn(ctx, tx, c)
+}
+
+// execer is the minimum surface CreateConsumer/CreateConsumerTx need —
+// satisfied by both *pgxpool.Pool and pgx.Tx.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func (s *Store) createConsumerOn(ctx context.Context, e execer, c ConsumerRegistration) error {
+	_, err := e.Exec(ctx,
 		`INSERT INTO consumer_registrations
 		    (id, agency_name, contact_email, keycloak_client_id, scopes, status, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,

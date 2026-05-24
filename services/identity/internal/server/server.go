@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/guva-ug/guva-backend/pkg/platform/audit"
 	"github.com/guva-ug/guva-backend/pkg/platform/auth"
 	"github.com/guva-ug/guva-backend/pkg/platform/health"
 	"github.com/guva-ug/guva-backend/pkg/platform/httpserver"
@@ -34,6 +35,7 @@ import (
 	"github.com/guva-ug/guva-backend/services/identity/internal/keycloakadmin"
 	"github.com/guva-ug/guva-backend/services/identity/internal/store"
 
+	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
@@ -313,7 +315,9 @@ func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadm
 			}
 		}
 
-		// 2. Persist the audit record. Now our DB and Keycloak agree.
+		// 2. Persist the audit record AND emit the audit event in the
+		//    same transaction. Either both commit or neither does, so
+		//    the audit ledger never disagrees with our DB.
 		reg := store.ConsumerRegistration{
 			ID:               uuid.NewString(),
 			AgencyName:       req.AgencyName,
@@ -323,7 +327,26 @@ func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadm
 			Status:           "active",
 			CreatedAt:        time.Now().UTC(),
 		}
-		if err := st.CreateConsumer(r.Context(), reg); err != nil {
+
+		tx, txErr := st.Pool().BeginTx(r.Context(), pgx.TxOptions{})
+		if txErr != nil {
+			logger.ErrorContext(r.Context(), "begin tx failed", "error", txErr)
+			// Roll back the Keycloak side — same compensation as below.
+			compCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = kc.DeleteClient(compCtx, kcResult.InternalID)
+			cancel()
+			problem.Write(w, http.StatusInternalServerError, "internal_error",
+				"failed to begin transaction; the Keycloak client was rolled back")
+			return
+		}
+		txCommitted := false
+		defer func() {
+			if !txCommitted {
+				_ = tx.Rollback(context.Background())
+			}
+		}()
+
+		if err := st.CreateConsumerTx(r.Context(), tx, reg); err != nil {
 			// Compensating delete — the Keycloak client now exists but
 			// our DB rejected the registration. Roll back so we don't
 			// leave an orphaned client in Keycloak with no audit trail.
@@ -351,6 +374,48 @@ func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadm
 				"failed to persist registration; the Keycloak client was rolled back")
 			return
 		}
+
+		// Emit the audit event inside the same transaction. The audit
+		// chain ends up with this event only if the consumer also
+		// persists; the consumer commits only if the audit event was
+		// staged. Atomic.
+		auditEventID, auditErr := audit.Emit(r.Context(), tx, audit.Event{
+			SourceKind:    "service",
+			Source:        "identity",
+			Type:          "identity.consumer.created",
+			SubjectKind:   "consumer",
+			Subject:       reg.KeycloakClientID,
+			Result:        "ok",
+			CorrelationID: r.Header.Get("X-Correlation-Id"),
+			Data: map[string]any{
+				"consumer_id":   reg.ID,
+				"agency_name":   reg.AgencyName,
+				"contact_email": reg.ContactEmail,
+				"scopes":        reg.Scopes,
+			},
+		})
+		if auditErr != nil {
+			logger.ErrorContext(r.Context(), "audit emit failed — rolling back tx and Keycloak",
+				"error", auditErr)
+			compCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = kc.DeleteClient(compCtx, kcResult.InternalID)
+			cancel()
+			problem.Write(w, http.StatusInternalServerError, "internal_error",
+				"failed to emit audit event; the Keycloak client was rolled back")
+			return
+		}
+
+		if commitErr := tx.Commit(r.Context()); commitErr != nil {
+			logger.ErrorContext(r.Context(), "commit failed — rolling back Keycloak",
+				"error", commitErr)
+			compCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = kc.DeleteClient(compCtx, kcResult.InternalID)
+			cancel()
+			problem.Write(w, http.StatusInternalServerError, "internal_error",
+				"failed to commit; the Keycloak client was rolled back")
+			return
+		}
+		txCommitted = true
 
 		// Stash the secret in Vault for operational recovery if the
 		// caller drops the response. This is best-effort: if the write
@@ -382,6 +447,7 @@ func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadm
 			"keycloak_internal_id", kcResult.InternalID,
 			"agency", reg.AgencyName,
 			"vault_stashed", vaultStashed,
+			"audit_event_id", auditEventID,
 		)
 
 		resp := createConsumerResponse{
