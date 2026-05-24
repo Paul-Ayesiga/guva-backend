@@ -1,13 +1,10 @@
-// Package httpserver builds the HTTP server for the reference service.
+// Package server wires the reference service's HTTP routes onto the
+// platform-provided server scaffolding.
 //
-// Routes:
-//
-//	GET  /healthz   liveness probe
-//	GET  /readyz    readiness probe
-//	GET  /metrics   Prometheus metrics
-//	GET  /ping      canonical sample endpoint used for end-to-end verification
-//	GET  /v1/ping   legacy alias retained for backwards compatibility
-package httpserver
+// This is the only service-specific HTTP code; everything reusable
+// (correlation-ID middleware, health probes, scope-enforcement
+// middleware, problem-details writer) lives in pkg/platform/*.
+package server
 
 import (
 	"encoding/json"
@@ -15,9 +12,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/guva-ug/guva-backend/services/reference/internal/auth"
+	"github.com/guva-ug/guva-backend/pkg/platform/auth"
+	"github.com/guva-ug/guva-backend/pkg/platform/health"
+	"github.com/guva-ug/guva-backend/pkg/platform/httpserver"
 	"github.com/guva-ug/guva-backend/services/reference/internal/config"
-	"github.com/guva-ug/guva-backend/services/reference/internal/health"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -25,7 +23,9 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-// New returns a fully-configured *http.Server.
+// New returns the reference service's *http.Server, wired up with
+// health probes, Prometheus metrics, and the /ping business endpoint
+// (gated by the verify:citizen scope).
 func New(cfg config.Config, logger *slog.Logger, probes *health.Probes) *http.Server {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
@@ -34,43 +34,14 @@ func New(cfg config.Config, logger *slog.Logger, probes *health.Probes) *http.Se
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", liveness())
-	mux.Handle("/readyz", readiness(probes))
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-	// /ping requires verify:citizen scope. The gateway already validates
-	// the JWT signature; this check is defence in depth + a way to fail
-	// closed if the service is ever reached without going through Kong.
+
 	ping := auth.RequireScope("verify:citizen",
 		otelhttp.NewHandler(pingHandler(cfg, logger), "GET /ping"))
 	mux.Handle("/ping", ping)
-	mux.Handle("/v1/ping", ping)
+	mux.Handle("/v1/ping", ping) // legacy alias
 
-	return &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           withCorrelationID(mux),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-}
-
-func liveness() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"alive"}`))
-	})
-}
-
-func readiness(p *health.Probes) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if !p.IsReady() {
-			http.Error(w, `{"status":"not_ready"}`, http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ready"}`))
-	})
+	return httpserver.New(httpserver.Config{Addr: cfg.HTTPAddr}, probes, mux)
 }
 
 func pingHandler(cfg config.Config, logger *slog.Logger) http.Handler {

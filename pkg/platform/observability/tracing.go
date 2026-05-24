@@ -6,8 +6,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/guva-ug/guva-backend/services/reference/internal/config"
-
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -17,13 +15,24 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-// InitTracing configures the global tracer provider with an OTLP gRPC
-// exporter pointed at the collector. The returned shutdown function must be
-// called from main on process exit to flush the queue.
-func InitTracing(ctx context.Context, cfg config.Config) (func(context.Context) error, error) {
+// TracingConfig captures the per-service inputs to InitTracing.
+type TracingConfig struct {
+	ServiceName  string // e.g. "identity"
+	Namespace    string // e.g. "guva"
+	Environment  string // e.g. "local" / "staging" / "production"
+	OTLPEndpoint string // e.g. "http://otel-collector:4317" or "otel-collector:4317"
+}
+
+// InitTracing configures the global OpenTelemetry tracer provider with an
+// OTLP gRPC exporter pointed at the collector. The returned shutdown
+// function MUST be called on process exit to flush the queue.
+//
+// Returns a no-op shutdown function and a non-nil error if anything fails;
+// callers can choose to continue without tracing rather than abort.
+func InitTracing(ctx context.Context, cfg TracingConfig) (func(context.Context) error, error) {
 	endpoint, insecure, err := parseOTLPEndpoint(cfg.OTLPEndpoint)
 	if err != nil {
-		return nil, err
+		return func(context.Context) error { return nil }, err
 	}
 
 	opts := []otlptracegrpc.Option{
@@ -36,18 +45,18 @@ func InitTracing(ctx context.Context, cfg config.Config) (func(context.Context) 
 
 	exporter, err := otlptrace.New(ctx, otlptracegrpc.NewClient(opts...))
 	if err != nil {
-		return nil, fmt.Errorf("otlp exporter: %w", err)
+		return func(context.Context) error { return nil }, fmt.Errorf("otlp exporter: %w", err)
 	}
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			semconv.ServiceName(cfg.ServiceName),
-			semconv.ServiceNamespace("guva"),
+			semconv.ServiceNamespace(cfg.Namespace),
 			semconv.DeploymentEnvironment(cfg.Environment),
 		),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("otel resource: %w", err)
+		return func(context.Context) error { return nil }, fmt.Errorf("otel resource: %w", err)
 	}
 
 	tp := sdktrace.NewTracerProvider(
@@ -62,8 +71,8 @@ func InitTracing(ctx context.Context, cfg config.Config) (func(context.Context) 
 	return tp.Shutdown, nil
 }
 
-// parseOTLPEndpoint accepts both `http://host:port` and `host:port` forms and
-// returns the host:port plus whether plaintext should be used.
+// parseOTLPEndpoint accepts both `http://host:port` and `host:port` forms
+// and returns host:port plus whether plaintext should be used.
 func parseOTLPEndpoint(raw string) (string, bool, error) {
 	if raw == "" {
 		return "", false, fmt.Errorf("empty OTLP endpoint")

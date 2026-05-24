@@ -1,15 +1,8 @@
 // Reference service for the GUVA backend.
 //
-// Demonstrates the structure that production services are expected to follow:
-//
-//   - Configuration loaded from environment, validated at startup, no panics
-//     past main.
-//   - Structured logging via slog.
-//   - OpenTelemetry traces exported to the collector at OTEL_EXPORTER_OTLP_ENDPOINT.
-//   - Prometheus metrics exposed on /metrics.
-//   - Liveness and readiness on /healthz and /readyz, suitable for Kubernetes
-//     probes (mirrors §6.6 of the non-functional requirements).
-//   - Graceful shutdown on SIGINT / SIGTERM.
+// Wires the shared platform library (pkg/platform/*) onto the service's
+// own routes (internal/server). See pkg/platform for the reusable parts:
+// auth, observability, httpserver, health, problem.
 package main
 
 import (
@@ -22,10 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/guva-ug/guva-backend/pkg/platform/health"
+	"github.com/guva-ug/guva-backend/pkg/platform/observability"
 	"github.com/guva-ug/guva-backend/services/reference/internal/config"
-	"github.com/guva-ug/guva-backend/services/reference/internal/health"
-	"github.com/guva-ug/guva-backend/services/reference/internal/httpserver"
-	"github.com/guva-ug/guva-backend/services/reference/internal/observability"
+	"github.com/guva-ug/guva-backend/services/reference/internal/server"
 )
 
 func main() {
@@ -41,10 +34,14 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	shutdownTracing, err := observability.InitTracing(ctx, cfg)
+	shutdownTracing, err := observability.InitTracing(ctx, observability.TracingConfig{
+		ServiceName:  cfg.ServiceName,
+		Namespace:    "guva",
+		Environment:  cfg.Environment,
+		OTLPEndpoint: cfg.OTLPEndpoint,
+	})
 	if err != nil {
 		logger.Warn("tracing init failed; continuing without traces", "error", err)
-		shutdownTracing = func(context.Context) error { return nil }
 	}
 	defer func() {
 		shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
@@ -55,7 +52,7 @@ func main() {
 	probes := health.New()
 	probes.MarkReady() // Nothing to wait on in this skeleton.
 
-	srv := httpserver.New(cfg, logger, probes)
+	srv := server.New(cfg, logger, probes)
 
 	go func() {
 		logger.Info("reference service listening", "addr", cfg.HTTPAddr)
