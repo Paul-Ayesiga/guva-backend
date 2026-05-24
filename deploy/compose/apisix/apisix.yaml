@@ -69,6 +69,44 @@ routes:
         key: remote_addr
         policy: local
 
+  - id: identity-public
+    uri: /v1/identity/*
+    methods: [GET, POST, PUT, DELETE]
+    upstream:
+      type: roundrobin
+      pass_host: pass
+      nodes:
+        "host.docker.internal:7071": 1
+      timeout:
+        connect: 5
+        send: 30
+        read: 30
+    plugins:
+      proxy-rewrite:
+        regex_uri: ["^/v1/identity/?(.*)$", "/$1"]
+      openid-connect:
+        # Same OIDC validation contract as the reference route. The
+        # identity service further checks the audit:read scope at the
+        # handler layer (services/identity/internal/server).
+        bearer_only: true
+        use_jwks: true
+        discovery: http://keycloak:8080/realms/guva/.well-known/openid-configuration
+        client_id: guva-reference
+        client_secret: reference-dev-secret
+        realm: guva
+        set_access_token_header: true
+        access_token_in_authorization_header: true
+        set_userinfo_header: false
+        accept_none_alg: false
+        accept_unsupported_alg: false
+      limit-count:
+        count: 600
+        time_window: 60
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+        policy: local
+
 global_rules:
   - id: 1
     plugins:

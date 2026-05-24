@@ -56,6 +56,7 @@ done
 echo "==> Seeding Vault (${VAULT_ADDR}) with dev-only secrets"
 write_kv "services/reference/config" "greeting=hello-from-vault"
 write_kv "services/identity/config" \
+  "db-password=guva" \
   "keycloak-admin-username=admin" \
   "keycloak-admin-password=admin"
 

@@ -3,5 +3,6 @@ go 1.22
 use (
 	./pkg/platform
 	./pkg/secrets
+	./services/identity
 	./services/reference
 )

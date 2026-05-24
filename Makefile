@@ -224,7 +224,8 @@ urls: ## Print local service URLs.
 	  "Postgres          postgres://guva:guva@localhost:5432/guva" \
 	  "Redis             redis://localhost:6379" \
 	  "Kafka             localhost:9094" \
-	  "Reference svc     http://localhost:7070  (run: make run-reference)"
+	  "Reference svc     http://localhost:7070  (run: make run-reference)" \
+	  "Identity svc      http://localhost:7071  (run: make run-identity; through gateway: /v1/identity/*)"
 
 .PHONY: clean
 clean: ## Remove build artifacts.

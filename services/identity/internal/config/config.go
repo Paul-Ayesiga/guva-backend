@@ -1,0 +1,88 @@
+// Package config loads identity-service configuration from environment
+// variables. Service-specific values (HTTP addr, DB DSN) come from env;
+// rotating values (DB password, Keycloak admin password) come from Vault
+// at startup — see cmd/server/main.go.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"strings"
+)
+
+type Config struct {
+	ServiceName string
+	HTTPAddr    string
+	LogLevel    slog.Level
+	Environment string
+
+	OTLPEndpoint string
+
+	VaultAddr  string
+	VaultToken string
+
+	// DBConn is the libpq-style DSN minus the password; password is
+	// fetched from Vault and joined in at startup.
+	DBHost    string
+	DBPort    string
+	DBUser    string
+	DBName    string
+	DBSSLMode string
+}
+
+func Load() (Config, error) {
+	cfg := Config{
+		ServiceName:  envOr("OTEL_SERVICE_NAME", "identity"),
+		HTTPAddr:     envOr("IDENTITY_HTTP_ADDR", ":7071"),
+		Environment:  envOr("OTEL_SERVICE_NAMESPACE", "local"),
+		OTLPEndpoint: envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
+		VaultAddr:    envOr("VAULT_ADDR", "http://localhost:8200"),
+		VaultToken:   envOr("VAULT_TOKEN", "dev-root-token"),
+		DBHost:       envOr("DB_HOST", "localhost"),
+		DBPort:       envOr("DB_PORT", "5432"),
+		DBUser:       envOr("DB_USER", "guva"),
+		DBName:       envOr("DB_NAME", "guva_identity"),
+		DBSSLMode:    envOr("DB_SSLMODE", "disable"),
+	}
+
+	level, err := parseLevel(envOr("IDENTITY_LOG_LEVEL", "info"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.LogLevel = level
+
+	if cfg.HTTPAddr == "" {
+		return Config{}, errors.New("IDENTITY_HTTP_ADDR must not be empty")
+	}
+	return cfg, nil
+}
+
+// DSN returns the libpq-style DSN with the given password joined in.
+func (c Config) DSN(password string) string {
+	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		c.DBHost, c.DBPort, c.DBUser, password, c.DBName, c.DBSSLMode)
+}
+
+func envOr(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		return v
+	}
+	return fallback
+}
+
+func parseLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info", "":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid log level %q", s)
+	}
+}
