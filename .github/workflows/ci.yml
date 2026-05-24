@@ -1,0 +1,81 @@
+# =============================================================================
+# CI — runs on every pull request and on every push to main.
+#
+# Three independent jobs run in parallel:
+#   pre-commit  — the same hooks developers run locally (whitespace, EOF,
+#                 yaml, json, gitleaks, markdownlint, go-fmt, go-mod-tidy)
+#   test        — go test -race across the workspace (both modules)
+#   lint        — golangci-lint v1.64.8 against the workspace
+#
+# Containers are intentionally NOT built/pushed yet — once we have a
+# registry to publish to, add a fourth job that builds with the service's
+# Dockerfile, scans with Trivy, signs with Cosign, and pushes.
+# =============================================================================
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel an in-flight run when new commits land on the same PR.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+
+  pre-commit:
+    name: Pre-commit hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # gitleaks scans history
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: false            # pre-commit hooks manage their own cache
+      - uses: pre-commit/action@v3.0.1
+
+  test:
+    name: Go tests (workspace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Verify workspace builds
+        run: |
+          for mod in pkg/platform pkg/secrets services/reference; do
+            echo "==> building $mod"
+            (cd "$mod" && go build ./...)
+          done
+      - name: Test
+        run: |
+          for mod in pkg/platform pkg/secrets services/reference; do
+            echo "==> testing $mod"
+            (cd "$mod" && go test -race -count=1 ./...)
+          done
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+          working-directory: .
+          args: --config=.golangci.yml ./...
