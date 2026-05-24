@@ -57,9 +57,9 @@ make status    # see service health
 make urls      # print the local URLs cheat sheet
 ```
 
-`make up` is two-phase by design: it brings up every service except Kong and waits for Keycloak to be healthy, then renders Kong's declarative config from `deploy/compose/kong/kong.yml.tmpl` (substituting the realm public key fetched live from Keycloak), then starts Kong. The rendered `kong.yml` is gitignored — secrets and rotating values never reach version control. Re-run `make refresh-keys` after Keycloak rotates its realm key.
+`make up` is two-phase by design: it brings up every service except APISIX and waits for Keycloak to be healthy, then renders APISIX's declarative config from `deploy/compose/apisix/apisix.yaml.tmpl` (substituting the realm public key fetched live from Keycloak), then starts APISIX. The rendered `apisix.yaml` is gitignored — secrets and rotating values never reach version control. APISIX standalone-mode hot-reloads the file within ~1s; `make refresh-keys` forces a re-render after Keycloak rotates its realm key.
 
-First boot takes 30–90 seconds depending on machine. Keycloak and Kong are the slowest; the rest are ready in under 15 seconds.
+First boot takes 30–90 seconds depending on machine. Keycloak and APISIX are the slowest; the rest are ready in under 15 seconds.
 
 If a service shows `unhealthy` after two minutes, get its logs:
 
@@ -89,7 +89,7 @@ make ping
 # Or do it manually:
 TOKEN=$(make token)                                               # fetch a JWT
 curl -sH "Authorization: Bearer $TOKEN" \
-  localhost:8000/v1/reference/ping | jq                           # through Kong
+  localhost:8000/v1/reference/ping | jq                           # through APISIX
 curl -sH "Authorization: Bearer $TOKEN" \
   localhost:7070/ping | jq                                        # direct
 curl -sH "Authorization: Bearer $TOKEN" \
@@ -127,9 +127,9 @@ Then open:
 
 - **Jaeger** — <http://localhost:16686>. Select service `reference` and look for the `GET /ping` span.
 - **Grafana** — <http://localhost:3000> (admin/admin). The Prometheus datasource is provisioned; query `up{job="reference"}` to confirm scrape success.
-- **Kong admin GUI** — <http://localhost:8002>. The `reference` service, route, JWT consumer, and plugins are loaded from declarative config.
+- **APISIX admin GUI** — <http://localhost:8002>. The `reference` service, route, JWT consumer, and plugins are loaded from declarative config.
 
-> **Why the JWT plugin and not OpenID Connect?** Kong's `openid-connect` plugin is paid-tier only. We run the fully-free OSS image (`kong/kong:3.9`) and use the OSS `jwt` plugin, which validates signatures against a per-consumer RSA public key. The key is **not** stored in version control — `deploy/compose/kong/kong.yml` is gitignored. At boot, `tools/scripts/render-kong-config.sh` fetches the realm key from Keycloak and renders it into `kong.yml` from the committed `kong.yml.tmpl` template. `make up` does this automatically when the rendered file is missing; `make refresh-keys` forces a re-render after Keycloak rotates its realm key.
+> **Why the jwt-auth plugin and not openid-connect (for now)?** APISIX's `openid-connect` plugin is fully free and supports JWKS discovery — but using it requires the token's `iss` claim to match what the OIDC discovery doc reports as the issuer. Out of the box, tokens fetched via `localhost:8080` have `iss=http://localhost:8080/realms/guva`, but APISIX inside Docker reaches Keycloak at `http://keycloak:8080` (different host). For Phase 1 we use the OSS `jwt-auth` plugin with a per-consumer public key rendered from `apisix.yaml.tmpl` at boot. **Phase 2 (in flight)** switches to `openid-connect` proper with `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true` so the discovery `issuer` stays stable while internal endpoints stay reachable — and then ultimately moves to a local DNS + TLS layer (e.g. Traefik in front of `*.localhost`) so dev/staging/prod all share the same auth flow.
 
 If all four checks pass, your stack is healthy. Stop the reference service with Ctrl-C.
 
@@ -204,7 +204,7 @@ Use `services/reference/` as the template. The skeleton requires nine moves; eve
    )
    ```
 4. Add a database to `deploy/compose/postgres/initdb.d/00-databases.sql` and the matching extensions in `01-extensions.sql`.
-5. Add a Kong route and service to `deploy/compose/kong/kong.yml`.
+5. Add an APISIX route and (if needed) consumer to `deploy/compose/apisix/apisix.yaml.tmpl`.
 6. Add a Prometheus scrape target to `deploy/compose/prometheus/prometheus.yml`.
 7. Add the service to `docker-compose.yml` (later — when you want it running in the compose stack rather than via `go run`).
 8. Write the OpenAPI spec at `services/<name>/api/openapi.yaml` first. Endpoints follow once the contract is reviewed.
@@ -326,7 +326,7 @@ On Linux, Docker Desktop adds `host.docker.internal` automatically; on rootless 
 
 ```yaml
 services:
-  kong:
+  apisix:
     extra_hosts:
       - "host.docker.internal:host-gateway"
   prometheus:

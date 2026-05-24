@@ -41,8 +41,10 @@ repos:
       - id: markdownlint
         # MD013 line-length, MD033 inline HTML, MD041 first-line-h1,
         # MD031 fenced-block-blanks (unfixable for indented fences
-        # inside numbered lists without restructuring the doc).
-        args: ["--disable", "MD013", "MD033", "MD041", "MD031", "--"]
+        # inside numbered lists without restructuring the doc),
+        # MD034 bare URLs (fine in tables and inline references),
+        # MD040 fenced-block-language (most are plain text/output).
+        args: ["--disable", "MD013", "MD033", "MD041", "MD031", "MD034", "MD040", "--"]
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.18.4

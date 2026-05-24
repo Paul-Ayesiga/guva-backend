@@ -71,8 +71,8 @@ After `make up`, the following endpoints are reachable on `localhost`:
 
 | Component | URL | Default credentials | Anchor |
 |---|---|---|---|
-| Kong Gateway (proxy) | http://localhost:8000 | — | [§7.2.1](../guva-docs/03-architecture/07-system-architecture.md) |
-| Kong Admin API | http://localhost:8001 | — | [§19.6](../guva-docs/06-infrastructure/19-recommended-tech-stack.md) |
+| APISIX Gateway (proxy) | http://localhost:8000 | — | [§7.2.1](../guva-docs/03-architecture/07-system-architecture.md) |
+| APISIX Prom metrics | http://localhost:9091 | — | [§19.6](../guva-docs/06-infrastructure/19-recommended-tech-stack.md) |
 | Keycloak | http://localhost:8080 | `admin` / `admin` (dev only) | [§7.2.2](../guva-docs/03-architecture/07-system-architecture.md) |
 | Vault UI | http://localhost:8200 | token: `dev-root-token` | [§10.4](../guva-docs/05-security/10-security-architecture.md) |
 | PostgreSQL | localhost:5432 | `guva` / `guva` | [§19.3](../guva-docs/06-infrastructure/19-recommended-tech-stack.md) |

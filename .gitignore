@@ -31,7 +31,7 @@ docker-compose.override.yml
 # Rendered configs that contain values fetched from secret stores
 # (Keycloak realm key, etc). The committed *.tmpl files stay in version
 # control; the rendered output does not.
-deploy/compose/kong/kong.yml
+deploy/compose/apisix/apisix.yaml
 
 # Logs
 *.log

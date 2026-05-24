@@ -1,0 +1,56 @@
+# =============================================================================
+# APISIX system config — controls the gateway process itself.
+# Routes / consumers / per-route plugins live in apisix.yaml (rendered from
+# apisix.yaml.tmpl). See deploy/compose/apisix/apisix.yaml.tmpl for those.
+# =============================================================================
+
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml   # standalone mode (no etcd)
+
+apisix:
+  node_listen: 9080         # public proxy port (mapped to host 8000)
+  enable_admin: false       # admin API meaningless in standalone mode
+  enable_dev_mode: false
+  enable_resolv_search_opt: true
+
+nginx_config:
+  error_log_level: warn
+  worker_processes: auto
+
+plugin_attr:
+  prometheus:
+    export_uri: /apisix/prometheus/metrics
+    metric_prefix: apisix_
+    enable_export_server: true
+    export_addr:
+      ip: "0.0.0.0"
+      port: 9091
+  opentelemetry:
+    trace_id_source: x-request-id
+    resource:
+      service.name: APISIX
+      service.namespace: guva
+    collector:
+      address: otel-collector:4318
+      request_timeout: 3
+      request_headers:
+        x-source: apisix
+    batch_span_processor:
+      drop_on_queue_full: false
+      max_queue_size: 1024
+      batch_timeout: 2
+      inactive_timeout: 1
+      max_export_batch_size: 16
+
+# Plugin allow-list. Only plugins listed here can be referenced from
+# apisix.yaml. Keep it minimal — every plugin is attack surface.
+plugins:
+  - real-ip                 # honour X-Forwarded-For for source IP
+  - request-id              # generates X-Correlation-Id if missing
+  - jwt-auth                # bearer-token validation
+  - proxy-rewrite           # strip /v1/<service> prefix before upstream
+  - limit-count             # rate limiting (count-based, like Kong's)
+  - prometheus              # /apisix/prometheus/metrics
+  - opentelemetry           # OTLP traces export

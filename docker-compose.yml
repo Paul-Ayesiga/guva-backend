@@ -251,38 +251,35 @@ services:
     networks: [guva]
 
   # ---------------------------------------------------------------------------
-  # Kong Gateway — API perimeter (§7.2.1, §19.6). Declarative (DB-less) mode.
+  # Apache APISIX — API perimeter (§7.2.1, §19.6).
   #
-  # Using the fully-free OSS image (`kong/kong`), not the Enterprise build's
-  # free mode (`kong/kong-gateway`). All plugins we rely on (jwt,
-  # rate-limiting, opentelemetry, prometheus, correlation-id) are OSS. The
-  # Enterprise-only `openid-connect` plugin is intentionally not used here;
-  # see DEVELOPMENT.md for the trade-off note.
+  # Runs in standalone mode (no etcd): routes + consumers + plugin config
+  # live in apisix.yaml, which APISIX hot-reloads on file change (~1s
+  # poll). The rendered apisix.yaml is gitignored; the committed template
+  # is apisix.yaml.tmpl. `make up` renders it from Keycloak's realm key.
+  #
+  # Public proxy on 9080 (mapped to the host 8000 to preserve curl URLs).
+  # The Admin API is intentionally disabled in standalone mode.
   # ---------------------------------------------------------------------------
-  kong:
+  apisix:
     <<: *restart
-    image: kong/kong:3.9
-    container_name: guva-kong
+    image: apache/apisix:3.16.0-debian
+    container_name: guva-apisix
     environment:
-      KONG_DATABASE: "off"
-      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
-      KONG_PROXY_ACCESS_LOG: /dev/stdout
-      KONG_ADMIN_ACCESS_LOG: /dev/stdout
-      KONG_PROXY_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_ERROR_LOG: /dev/stderr
-      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
-      KONG_ADMIN_GUI_LISTEN: "0.0.0.0:8002"
-      KONG_PLUGINS: "bundled"
-      KONG_LOG_LEVEL: info
+      # Pick up changes to the config files without restarting the container
+      APISIX_STAND_ALONE: "true"
     ports:
-      - "8000:8000"   # proxy
-      - "8001:8001"   # admin api
-      - "8002:8002"   # admin gui
+      - "8000:9080"     # public proxy (host:container) — keeps curl URLs stable
+      - "9091:9091"     # prometheus exporter
     volumes:
-      - ./deploy/compose/kong/kong.yml:/etc/kong/kong.yml:ro
+      - ./deploy/compose/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./deploy/compose/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+    # APISIX doesn't ship a built-in /healthz; any non-connection-error
+    # response from the proxy port means it's alive and routing. We
+    # accept HTTP 404 (no route matches /__healthcheck) as "up".
     healthcheck:
       <<: *hc-defaults
-      test: ["CMD", "kong", "health"]
+      test: ["CMD-SHELL", "curl -sf -o /dev/null -w '%{http_code}' http://localhost:9080/__healthcheck | grep -qE '^(2|4)'"]
     networks: [guva]
 
   # ---------------------------------------------------------------------------

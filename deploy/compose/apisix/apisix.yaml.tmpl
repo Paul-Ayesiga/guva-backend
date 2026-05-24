@@ -1,0 +1,75 @@
+# =============================================================================
+# APISIX routes / consumers / per-route plugins TEMPLATE.
+#
+# This file is committed; the rendered output (deploy/compose/apisix/
+# apisix.yaml) is gitignored. `make refresh-keys` and (on first boot)
+# `make up` substitute the placeholders below.
+#
+# Placeholders (each appears verbatim once in this file; the renderer
+# substitutes the FIRST occurrence on its own line):
+#   KEYCLOAK_REALM_PUBKEY_PEM  — RSA public key from Keycloak's `guva`
+#                                realm, formatted as a PEM block indented
+#                                to land in the right YAML column.
+#
+# APISIX standalone hot-reloads this file on disk (~1s poll); no restart
+# needed after `make refresh-keys`. The trailing `#END` line IS required
+# in standalone mode — do not delete it.
+# =============================================================================
+
+routes:
+  - id: reference-public
+    uri: /v1/reference/*
+    methods: [GET, POST]
+    upstream:
+      type: roundrobin
+      pass_host: pass
+      nodes:
+        "host.docker.internal:7070": 1
+      timeout:
+        connect: 5
+        send: 30
+        read: 30
+    plugins:
+      # Trim /v1/reference off before forwarding so the service sees /ping
+      proxy-rewrite:
+        regex_uri: ["^/v1/reference/?(.*)$", "/$1"]
+      # Bearer-token validation. Keycloak tokens carry no `key` claim, so
+      # point jwt-auth at `iss` for consumer lookup. The matching consumer
+      # entry (below) has its jwt-auth.key set to the iss URL.
+      jwt-auth:
+        key_claim_name: iss
+      # 600 req/min/IP — burst of 3x for 5s
+      limit-count:
+        count: 600
+        time_window: 60
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+        policy: local
+
+# consumers map an `iss` claim to a JWT credential. The key MUST equal the
+# iss claim Keycloak puts in tokens (i.e. the URL the client used to fetch
+# them). rsa_public_key is rendered at boot from /realms/guva.
+consumers:
+  - username: guva_reference
+    plugins:
+      jwt-auth:
+        key: http://localhost:8080/realms/guva
+        algorithm: RS256
+        public_key: |
+__KEYCLOAK_REALM_PUBKEY_PEM__
+
+# Global plugins fire on every route — keep this list short.
+global_rules:
+  - id: 1
+    plugins:
+      request-id:
+        header_name: X-Correlation-Id
+        include_in_response: true
+      prometheus:
+        prefer_name: true
+      opentelemetry:
+        sampler:
+          name: always_on
+
+#END
