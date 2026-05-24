@@ -1,0 +1,57 @@
+meta {
+  name: 04 Create Consumer
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{apiBaseUrl}}/consumers
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "agency_name": "Acacia Innovations Limited",
+    "contact_email": "platform-ops@acacia.example",
+    "keycloak_client_id": "acacia-onboarding-{{$randomInt}}",
+    "scopes": ["verify:citizen"]
+  }
+}
+
+docs {
+  Registers a new consumer. Behind the scenes, identity:
+    1. Creates the Keycloak client with the given clientId
+    2. Generates a client secret (Keycloak does)
+    3. Records the registration in Postgres
+    4. Returns the registration + the generated secret in the 201 body
+       (one-time disclosure — capture it now)
+
+  Stashes `id` into `{{consumerId}}` and `generated_client_secret` into
+  `{{generatedClientSecret}}` so the next requests can use them.
+}
+
+script:post-response {
+  if (res.status === 201 && res.body) {
+    if (res.body.id) bru.setEnvVar("consumerId", res.body.id);
+    if (res.body.keycloak_client_id) bru.setEnvVar("newClientId", res.body.keycloak_client_id);
+    if (res.body.generated_client_secret) bru.setEnvVar("generatedClientSecret", res.body.generated_client_secret);
+  }
+}
+
+tests {
+  test("status is 201", function() { expect(res.status).to.equal(201); });
+  test("id is a uuid", function() { expect(res.body.id).to.match(/^[0-9a-f-]{36}$/); });
+  test("status is active", function() { expect(res.body.status).to.equal("active"); });
+  test("generated_client_secret is present", function() {
+    expect(res.body.generated_client_secret).to.be.a("string").and.have.length.greaterThan(20);
+  });
+}

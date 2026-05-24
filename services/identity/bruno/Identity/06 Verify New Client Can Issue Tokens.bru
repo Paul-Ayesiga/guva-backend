@@ -1,0 +1,36 @@
+meta {
+  name: 06 Verify New Client Can Issue Tokens
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{authBaseUrl}}/realms/{{realm}}/protocol/openid-connect/token
+  body: formUrlEncoded
+  auth: none
+}
+
+headers {
+  Content-Type: application/x-www-form-urlencoded
+}
+
+body:form-urlencoded {
+  grant_type: client_credentials
+  client_id: {{newClientId}}
+  client_secret: {{generatedClientSecret}}
+}
+
+docs {
+  Closes the loop end-to-end: the client we just created in request 04
+  should be able to self-issue a Keycloak token using the secret we got
+  back.
+
+  `newClientId` and `generatedClientSecret` are populated automatically
+  by the post-response script on request 04 — just run the requests in
+  order (00 → 04 → 06) and this works.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("access_token returned", function() { expect(res.body.access_token).to.be.a("string"); });
+}

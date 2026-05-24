@@ -1,39 +1,92 @@
 openapi: 3.1.0
 info:
   title: GUVA Identity Service
-  version: 0.1.0
+  version: 0.2.0
   description: |
-    Owns the platform's scope catalogue and tracks consumer registrations.
-    The Keycloak realm is the source of truth for credentials and scopes;
-    this service holds the lifecycle metadata (who onboarded when).
+    Owns the platform's **scope catalogue** and tracks **consumer registrations**.
+
+    Keycloak is the source of truth for client credentials and the issuer of access tokens.
+    This service sits beside Keycloak holding the lifecycle metadata (who onboarded when, for which scopes, by whom).
+
+    ## Authentication
+
+    Every endpoint (other than `/healthz` / `/readyz`) requires a Bearer JWT. Get one from Keycloak:
+
+    ```bash
+    curl -X POST https://auth.guva.localhost/realms/guva/protocol/openid-connect/token \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      -d 'grant_type=client_credentials' \
+      -d 'client_id=guva-reference' \
+      -d 'client_secret=reference-dev-secret'
+    ```
+
+    In Bruno, the included environment files set up `{{authBaseUrl}}`, `{{clientId}}`, `{{clientSecret}}`,
+    and the `/identity/{{Get Token}}` request stashes the token in `{{accessToken}}` for use by the rest
+    of the collection.
+
+    ## Routes through the gateway
+
+    `https://api.guva.go.ug/v1/identity/...` in production; `http://localhost:8000/v1/identity/...` locally.
+    APISIX strips the `/v1/identity` prefix before forwarding to this service.
+
+    ## Error responses
+
+    All errors follow RFC 7807 Problem Details with the platform's `type` URI base
+    `https://api.guva.go.ug/errors/`. The `type` is stable per error class so consumers can
+    programmatic-handle by it rather than the human-readable `title`.
+
 servers:
-  - url: http://localhost:7071
-    description: Direct (bypasses APISIX)
   - url: http://localhost:8000/v1/identity
-    description: Via APISIX gateway
+    description: Local — via APISIX gateway (recommended)
+  - url: http://localhost:7071
+    description: Local — direct to the service (bypasses gateway; dev only)
+  - url: https://api.guva.go.ug/v1/identity
+    description: Production
+
 security:
   - bearerAuth: []
+
+tags:
+  - name: scopes
+    description: Read-only access to the platform's scope catalogue.
+  - name: consumers
+    description: Register new platform consumers (creates the corresponding Keycloak client).
+  - name: probes
+    description: Liveness and readiness, for orchestrators only.
+
 paths:
+
   /healthz:
     get:
-      summary: Liveness probe
+      tags: [probes]
+      summary: Liveness
       security: []
       responses:
-        "200": { description: Service is alive }
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: alive }
+
   /readyz:
     get:
-      summary: Readiness probe
+      tags: [probes]
+      summary: Readiness
       security: []
       responses:
-        "200": { description: Ready }
-        "503": { description: Not ready }
+        "200": { description: Ready to serve traffic }
+        "503": { description: Not ready (dependencies still resolving) }
+
   /scopes:
     get:
+      tags: [scopes]
       summary: List the platform's scope catalogue
       description: |
-        Returns every scope the platform knows about with a human-readable
-        description and a category. Consumers use this to figure out what
-        access they should request when onboarding.
+        Returns every scope the platform knows about. Consumers use this to figure out
+        what access they should request during registration.
       responses:
         "200":
           description: Scope catalogue
@@ -41,83 +94,272 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [count, scopes]
                 properties:
-                  count: { type: integer }
+                  count:  { type: integer, example: 11 }
                   scopes:
                     type: array
                     items: { $ref: '#/components/schemas/Scope' }
-        "401": { description: Unauthorized }
-        "403": { description: Insufficient scope }
+              examples:
+                default:
+                  value:
+                    count: 11
+                    scopes:
+                      - { name: "verify:citizen", description: "Verify citizen identity attributes", category: "verification" }
+                      - { name: "audit:read",     description: "Read audit log entries",             category: "audit" }
+                      - { name: "admin:consumers", description: "Administer consumer registrations", category: "admin" }
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "403":
+          description: Token does not carry the required scope
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /consumers:
     post:
+      tags: [consumers]
       summary: Register a new consumer
       description: |
-        Records a consumer registration intent. A future iteration will
-        also create the corresponding Keycloak client via the admin API;
-        for now the response records the request and a Keycloak-side
-        client must be provisioned separately.
+        Provisions a confidential Keycloak client in the `guva` realm, records the
+        registration in the identity service's DB, and returns the **generated
+        client secret exactly once**. Subsequent GETs do not return the secret.
+
+        The new Keycloak client is created with:
+          - `serviceAccountsEnabled: true` (client_credentials grant only)
+          - `publicClient: false`
+          - `clientAuthenticatorType: client-secret`
+          - `defaultClientScopes` set to the `scopes` array supplied in the request
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/CreateConsumerRequest' }
+            examples:
+              basic:
+                summary: Bank onboarding for citizen verification
+                value:
+                  agency_name: "Acacia Innovations Limited"
+                  contact_email: "platform-ops@acacia.example"
+                  keycloak_client_id: "acacia-onboarding"
+                  scopes: ["verify:citizen"]
       responses:
         "201":
-          description: Created
+          description: |
+            Consumer registered and Keycloak client created. **The `generated_client_secret`
+            is shown only here** — capture it before closing the response.
           headers:
             Location:
-              schema: { type: string }
+              description: URL of the new registration
+              schema: { type: string, example: "/consumers/0fa57403-de2c-4c77-b61a-7fc7dc1ac08d" }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ConsumerRegistration' }
-        "400": { description: Invalid request }
-        "401": { description: Unauthorized }
-        "403": { description: Insufficient scope }
+              schema: { $ref: '#/components/schemas/CreateConsumerResponse' }
+              examples:
+                default:
+                  value:
+                    id: "0fa57403-de2c-4c77-b61a-7fc7dc1ac08d"
+                    agency_name: "Acacia Innovations Limited"
+                    contact_email: "platform-ops@acacia.example"
+                    keycloak_client_id: "acacia-onboarding"
+                    scopes: ["verify:citizen"]
+                    status: "active"
+                    created_at: "2026-05-24T16:52:31.084635Z"
+                    generated_client_secret: "<generated-secret-redacted>"
+                    _note: "This secret is shown only here. Store it securely; subsequent GETs will not include it."
+        "400":
+          description: Request body invalid (e.g. missing `agency_name` or `keycloak_client_id`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "403":
+          description: Token does not carry the required scope
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "409":
+          description: A Keycloak client with that `keycloak_client_id` already exists
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+              examples:
+                conflict:
+                  value:
+                    type: "https://api.guva.go.ug/errors/client_exists"
+                    title: "client_exists"
+                    status: 409
+                    detail: "a Keycloak client with that id already exists in the guva realm"
+        "502":
+          description: Keycloak unreachable or admin auth failed
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "500":
+          description: Keycloak client created but persistence failed (reconcile required)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
   /consumers/{id}:
     get:
+      tags: [consumers]
       summary: Read a consumer registration
+      description: |
+        Returns the registration record. The `generated_client_secret` field is **never**
+        returned here — that's a one-time disclosure at creation time.
       parameters:
         - in: path
           name: id
           required: true
           schema: { type: string, format: uuid }
+          example: "0fa57403-de2c-4c77-b61a-7fc7dc1ac08d"
       responses:
         "200":
           description: Found
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ConsumerRegistration' }
-        "404": { description: Not found }
-        "401": { description: Unauthorized }
-        "403": { description: Insufficient scope }
+        "404":
+          description: No registration with that id
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "403":
+          description: Token does not carry the required scope
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
 components:
+
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: |
+        Keycloak-issued OAuth 2.0 access token (RS256-signed JWT).
+        Validated by APISIX at the gateway; re-validated for scope at the service.
+
   schemas:
+
     Scope:
       type: object
+      required: [name, description, category]
       properties:
-        name:        { type: string, example: "verify:citizen" }
-        description: { type: string }
-        category:    { type: string, example: "verification" }
+        name:
+          type: string
+          example: "verify:citizen"
+        description:
+          type: string
+          example: "Verify citizen identity attributes"
+        category:
+          type: string
+          enum: [verification, consent, audit, delivery, admin]
+          example: "verification"
+
     CreateConsumerRequest:
       type: object
       required: [agency_name, keycloak_client_id]
       properties:
-        agency_name:        { type: string }
-        contact_email:      { type: string, format: email }
-        keycloak_client_id: { type: string }
+        agency_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: "Acacia Innovations Limited"
+        contact_email:
+          type: string
+          format: email
+          example: "platform-ops@acacia.example"
+        keycloak_client_id:
+          type: string
+          description: |
+            The clientId that will be created in the Keycloak `guva` realm.
+            Must be unique within the realm; characters typically restricted to
+            `[a-zA-Z0-9_-]`.
+          example: "acacia-onboarding"
+        scopes:
+          type: array
+          description: Realm scope names to grant the new client as defaultClientScopes.
+          items: { type: string }
+          example: ["verify:citizen"]
+
+    ConsumerRegistration:
+      type: object
+      required: [id, agency_name, keycloak_client_id, scopes, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "0fa57403-de2c-4c77-b61a-7fc7dc1ac08d"
+        agency_name:        { type: string, example: "Acacia Innovations Limited" }
+        contact_email:      { type: string, format: email, example: "platform-ops@acacia.example" }
+        keycloak_client_id: { type: string, example: "acacia-onboarding" }
         scopes:
           type: array
           items: { type: string }
-    ConsumerRegistration:
+          example: ["verify:citizen"]
+        status:
+          type: string
+          enum: [pending, active, suspended, revoked]
+          example: "active"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-05-24T16:52:31.084635Z"
+
+    CreateConsumerResponse:
       allOf:
-        - $ref: '#/components/schemas/CreateConsumerRequest'
+        - $ref: '#/components/schemas/ConsumerRegistration'
         - type: object
+          required: [generated_client_secret]
           properties:
-            id:         { type: string, format: uuid }
-            status:     { type: string, enum: [pending, active, suspended, revoked] }
-            created_at: { type: string, format: date-time }
+            generated_client_secret:
+              type: string
+              description: |
+                The client secret generated by Keycloak for the new client.
+                **One-time disclosure** — store it immediately; this field is
+                not returned by any other endpoint.
+              example: "<generated-secret-redacted>"
+            _note:
+              type: string
+              example: "This secret is shown only here. Store it securely; subsequent GETs will not include it."
+
+    Problem:
+      type: object
+      description: RFC 7807 problem details
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          example: "https://api.guva.go.ug/errors/client_exists"
+        title:
+          type: string
+          example: "client_exists"
+        status:
+          type: integer
+          example: 409
+        detail:
+          type: string
+          example: "a Keycloak client with that id already exists in the guva realm"
+        instance:
+          type: string
+          example: "/v1/identity/consumers"
+        correlation_id:
+          type: string
+          format: uuid
+          example: "9369c308-d96d-4905-9096-f369161cdb77"

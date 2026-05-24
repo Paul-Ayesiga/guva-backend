@@ -1,0 +1,42 @@
+meta {
+  name: 00 Get Token
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{authBaseUrl}}/realms/{{realm}}/protocol/openid-connect/token
+  body: formUrlEncoded
+  auth: none
+}
+
+headers {
+  Content-Type: application/x-www-form-urlencoded
+}
+
+body:form-urlencoded {
+  grant_type: client_credentials
+  client_id: {{clientId}}
+  client_secret: {{clientSecret}}
+}
+
+docs {
+  Fetches a Keycloak access token via the client-credentials grant.
+  Stashes the token into the `accessToken` environment variable so the rest
+  of the collection can use it. Run this first whenever the previous token
+  expires (default lifetime: 1h).
+
+  If TLS verification fails on https://auth.guva.localhost, run `make trust-ca`
+  on the host once to install Caddy's local root CA.
+}
+
+script:post-response {
+  if (res.status === 200 && res.body && res.body.access_token) {
+    bru.setEnvVar("accessToken", res.body.access_token);
+  }
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("access_token returned", function() { expect(res.body.access_token).to.be.a("string"); });
+}

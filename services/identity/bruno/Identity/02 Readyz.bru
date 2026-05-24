@@ -1,0 +1,19 @@
+meta {
+  name: 02 Readyz
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{directBaseUrl}}/readyz
+  auth: none
+}
+
+docs {
+  Readiness probe. Returns 200 once startup checks (DB connect, Vault
+  secrets fetch, Keycloak admin client init) have passed; 503 otherwise.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+}

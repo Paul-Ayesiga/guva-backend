@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "GUVA Identity",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

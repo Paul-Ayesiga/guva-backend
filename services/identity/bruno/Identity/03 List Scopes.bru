@@ -1,0 +1,35 @@
+meta {
+  name: 03 List Scopes
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{apiBaseUrl}}/scopes
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Returns the platform's scope catalogue. Requires `audit:read` scope on
+  the token (guva-reference carries this by default).
+
+  Runs through APISIX (`{{apiBaseUrl}}` = http://localhost:8000/v1/identity),
+  exercising the full gateway → service path.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("count is a number", function() { expect(res.body.count).to.be.a("number"); });
+  test("scopes is an array", function() { expect(res.body.scopes).to.be.an("array"); });
+  test("each scope has name/description/category", function() {
+    res.body.scopes.forEach(function(s) {
+      expect(s.name).to.be.a("string");
+      expect(s.description).to.be.a("string");
+      expect(s.category).to.be.a("string");
+    });
+  });
+}

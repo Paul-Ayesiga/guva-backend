@@ -1,0 +1,31 @@
+meta {
+  name: 05 Get Consumer
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{apiBaseUrl}}/consumers/{{consumerId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Read back a registration by id. Uses `{{consumerId}}` set by request 04
+  (Create Consumer).
+
+  Note: the response does NOT include `generated_client_secret` — that's
+  only returned at creation time. If the caller didn't capture it then,
+  they need to rotate the secret (future endpoint).
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("id matches", function() { expect(res.body.id).to.equal(bru.getEnvVar("consumerId")); });
+  test("generated_client_secret is NOT returned", function() {
+    expect(res.body.generated_client_secret).to.be.undefined;
+  });
+}
