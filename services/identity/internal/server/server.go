@@ -24,6 +24,7 @@ import (
 	"github.com/guva-ug/guva-backend/pkg/platform/httpserver"
 	"github.com/guva-ug/guva-backend/pkg/platform/problem"
 	"github.com/guva-ug/guva-backend/services/identity/internal/config"
+	"github.com/guva-ug/guva-backend/services/identity/internal/keycloakadmin"
 	"github.com/guva-ug/guva-backend/services/identity/internal/store"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -55,7 +56,7 @@ var scopeCatalogue = []Scope{
 }
 
 // New returns the identity service's *http.Server.
-func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *store.Store) *http.Server {
+func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *store.Store, kc *keycloakadmin.Client) *http.Server {
 	mux := http.NewServeMux()
 
 	// Read endpoints — protected by audit:read (a read-only scope that
@@ -74,7 +75,7 @@ func New(cfg config.Config, logger *slog.Logger, probes *health.Probes, st *stor
 	// the admin:consumers scope and probably a separate platform-admin
 	// client with stricter rate limits.
 	consumersPost := auth.RequireScope("audit:read",
-		otelhttp.NewHandler(createConsumerHandler(logger, st), "POST /consumers"))
+		otelhttp.NewHandler(createConsumerHandler(logger, st, kc), "POST /consumers"))
 	mux.Handle("POST /consumers", consumersPost)
 
 	return httpserver.New(httpserver.Config{Addr: cfg.HTTPAddr}, probes, mux)
@@ -102,7 +103,17 @@ type createConsumerRequest struct {
 	Scopes           []string `json:"scopes"`
 }
 
-func createConsumerHandler(logger *slog.Logger, st *store.Store) http.Handler {
+// createConsumerResponse extends the persisted record with the one-time
+// secret returned by Keycloak. The secret is omitted from every other
+// response (GET /consumers/{id}, list endpoints when they exist) —
+// callers MUST capture it from this 201 body.
+type createConsumerResponse struct {
+	store.ConsumerRegistration
+	GeneratedClientSecret string `json:"generated_client_secret"`
+	SecretDisclosureNote  string `json:"_note"`
+}
+
+func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadmin.Client) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req createConsumerRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -118,29 +129,75 @@ func createConsumerHandler(logger *slog.Logger, st *store.Store) http.Handler {
 			return
 		}
 
+		// 1. Create the Keycloak client first — if this fails we don't
+		//    want a half-registered row in our DB. Idempotency would be
+		//    nicer (retry the same request and continue from where we
+		//    left off) but is a follow-up; today: fail-fast.
+		kcResult, err := kc.CreateConfidentialClient(r.Context(), keycloakadmin.CreateClientRequest{
+			ClientID:            req.KeycloakClientID,
+			Name:                req.AgencyName,
+			DefaultClientScopes: req.Scopes,
+		})
+		if err != nil {
+			switch {
+			case errors.Is(err, keycloakadmin.ErrClientExists):
+				problem.Write(w, http.StatusConflict, "client_exists",
+					"a Keycloak client with that id already exists in the guva realm")
+				return
+			case errors.Is(err, keycloakadmin.ErrAdminCredentials):
+				logger.ErrorContext(r.Context(), "keycloak admin auth failed", "error", err)
+				problem.Write(w, http.StatusBadGateway, "upstream_unavailable",
+					"identity service cannot authenticate to Keycloak; admin credentials may have rotated")
+				return
+			default:
+				logger.ErrorContext(r.Context(), "keycloak client create failed", "error", err)
+				problem.Write(w, http.StatusBadGateway, "upstream_error",
+					"failed to create client in Keycloak")
+				return
+			}
+		}
+
+		// 2. Persist the audit record. Now our DB and Keycloak agree.
 		reg := store.ConsumerRegistration{
 			ID:               uuid.NewString(),
 			AgencyName:       req.AgencyName,
 			ContactEmail:     req.ContactEmail,
-			KeycloakClientID: req.KeycloakClientID,
+			KeycloakClientID: kcResult.ClientID,
 			Scopes:           req.Scopes,
-			Status:           "pending", // becomes "active" when Keycloak client is created (future)
+			Status:           "active",
 			CreatedAt:        time.Now().UTC(),
 		}
 		if err := st.CreateConsumer(r.Context(), reg); err != nil {
-			logger.ErrorContext(r.Context(), "create consumer failed", "error", err)
-			problem.Write(w, http.StatusInternalServerError, "internal_error", "failed to persist registration")
+			// The Keycloak client now exists but we couldn't record it.
+			// Log loud so an operator can manually reconcile; the next
+			// iteration is to also delete the Keycloak client on this
+			// branch (compensating action).
+			logger.ErrorContext(r.Context(), "persist consumer failed AFTER keycloak client created — RECONCILE REQUIRED",
+				"keycloak_internal_id", kcResult.InternalID,
+				"keycloak_client_id", kcResult.ClientID,
+				"error", err,
+			)
+			problem.Write(w, http.StatusInternalServerError, "internal_error",
+				"client created in Keycloak but registration could not be persisted")
 			return
 		}
+
 		logger.InfoContext(r.Context(), "consumer.created",
 			"correlation_id", r.Header.Get("X-Correlation-Id"),
 			"consumer_id", reg.ID,
+			"keycloak_internal_id", kcResult.InternalID,
 			"agency", reg.AgencyName,
 		)
+
+		resp := createConsumerResponse{
+			ConsumerRegistration:  reg,
+			GeneratedClientSecret: kcResult.Secret,
+			SecretDisclosureNote:  "This secret is shown only here. Store it securely; subsequent GETs will not include it.",
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Location", "/consumers/"+reg.ID)
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(reg)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 }
 

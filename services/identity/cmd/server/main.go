@@ -22,6 +22,7 @@ import (
 	"github.com/guva-ug/guva-backend/pkg/platform/observability"
 	"github.com/guva-ug/guva-backend/pkg/secrets"
 	"github.com/guva-ug/guva-backend/services/identity/internal/config"
+	"github.com/guva-ug/guva-backend/services/identity/internal/keycloakadmin"
 	"github.com/guva-ug/guva-backend/services/identity/internal/server"
 	"github.com/guva-ug/guva-backend/services/identity/internal/store"
 )
@@ -87,10 +88,35 @@ func main() {
 	defer st.Close()
 	logger.Info("db connected", "host", cfg.DBHost, "db", cfg.DBName)
 
+	// Resolve Keycloak admin credentials from Vault. These let identity
+	// create/manage clients in the guva realm via Keycloak's Admin REST
+	// API. Fall back to env vars only if Vault is unseeded (dev mode).
+	kcAdminUser, _ := vault.GetString(ctx, "services/identity/config", "keycloak-admin-username")
+	if kcAdminUser == "" {
+		kcAdminUser = envOr("KEYCLOAK_ADMIN", "admin")
+	}
+	kcAdminPass, err := vault.GetString(ctx, "services/identity/config", "keycloak-admin-password")
+	if err != nil {
+		kcAdminPass = envOr("KEYCLOAK_ADMIN_PASSWORD", "admin")
+		logger.Warn("vault fetch failed for keycloak-admin-password, falling back to env",
+			"fallback_source", "KEYCLOAK_ADMIN_PASSWORD env (or default 'admin')")
+	}
+	kcAdmin, err := keycloakadmin.NewClient(keycloakadmin.Config{
+		BaseURL:       cfg.KeycloakBackendURL,
+		Realm:         cfg.KeycloakRealm,
+		AdminUser:     kcAdminUser,
+		AdminPassword: kcAdminPass,
+	})
+	if err != nil {
+		logger.Error("keycloakadmin client init failed", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("keycloak admin client ready", "backend_url", cfg.KeycloakBackendURL, "realm", cfg.KeycloakRealm)
+
 	probes := health.New()
 	probes.MarkReady()
 
-	srv := server.New(cfg, logger, probes, st)
+	srv := server.New(cfg, logger, probes, st, kcAdmin)
 
 	go func() {
 		logger.Info("identity service listening", "addr", cfg.HTTPAddr)
@@ -111,4 +137,11 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("bye")
+}
+
+func envOr(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		return v
+	}
+	return fallback
 }

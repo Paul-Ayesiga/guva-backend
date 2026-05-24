@@ -30,21 +30,32 @@ type Config struct {
 	DBUser    string
 	DBName    string
 	DBSSLMode string
+
+	// KeycloakBackendURL is the URL identity uses to reach Keycloak's
+	// admin API. Distinct from the FRONTEND URL (the iss claim, which
+	// is https://auth.guva.localhost): identity never goes through
+	// Caddy because it would need to trust Caddy's local CA. It hits
+	// Keycloak by its docker-network name (or by localhost when run
+	// on the host).
+	KeycloakBackendURL string
+	KeycloakRealm      string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		ServiceName:  envOr("OTEL_SERVICE_NAME", "identity"),
-		HTTPAddr:     envOr("IDENTITY_HTTP_ADDR", ":7071"),
-		Environment:  envOr("OTEL_SERVICE_NAMESPACE", "local"),
-		OTLPEndpoint: envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
-		VaultAddr:    envOr("VAULT_ADDR", "http://localhost:8200"),
-		VaultToken:   envOr("VAULT_TOKEN", "dev-root-token"),
-		DBHost:       envOr("DB_HOST", "localhost"),
-		DBPort:       envOr("DB_PORT", "5432"),
-		DBUser:       envOr("DB_USER", "guva"),
-		DBName:       envOr("DB_NAME", "guva_identity"),
-		DBSSLMode:    envOr("DB_SSLMODE", "disable"),
+		ServiceName:        envOr("OTEL_SERVICE_NAME", "identity"),
+		HTTPAddr:           envOr("IDENTITY_HTTP_ADDR", ":7071"),
+		Environment:        envOr("OTEL_SERVICE_NAMESPACE", "local"),
+		OTLPEndpoint:       envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
+		VaultAddr:          envOr("VAULT_ADDR", "http://localhost:8200"),
+		VaultToken:         envOr("VAULT_TOKEN", "dev-root-token"),
+		DBHost:             envOr("DB_HOST", "localhost"),
+		DBPort:             envOr("DB_PORT", "5432"),
+		DBUser:             envOr("DB_USER", "guva"),
+		DBName:             envOr("DB_NAME", "guva_identity"),
+		DBSSLMode:          envOr("DB_SSLMODE", "disable"),
+		KeycloakBackendURL: envOr("KEYCLOAK_BACKEND_URL", "http://localhost:8080"),
+		KeycloakRealm:      envOr("KEYCLOAK_REALM", "guva"),
 	}
 
 	level, err := parseLevel(envOr("IDENTITY_LOG_LEVEL", "info"))
