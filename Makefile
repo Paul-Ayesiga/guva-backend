@@ -226,7 +226,8 @@ urls: ## Print local service URLs.
 	  "Redis             redis://localhost:6379" \
 	  "Kafka             localhost:9094" \
 	  "Reference svc     http://localhost:7070  (run: make run-reference)" \
-	  "Identity svc      http://localhost:7071  (run: make run-identity; through gateway: /v1/identity/*)"
+	  "Identity svc      http://localhost:7071  (run: make run-identity; through gateway: /v1/identity/*)" \
+	  "Audit svc         http://localhost:7072  (run: make run-audit;    through gateway: /v1/audit/*)"
 
 .PHONY: clean
 clean: ## Remove build artifacts.
