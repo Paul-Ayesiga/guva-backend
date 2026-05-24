@@ -109,3 +109,48 @@ func (s *Store) GetConsumer(ctx context.Context, id string) (ConsumerRegistratio
 
 // ErrNotFound is returned by GetConsumer when no row matches the ID.
 var ErrNotFound = fmt.Errorf("consumer registration not found")
+
+// IdempotencyRecord is one row of the idempotency_keys table.
+type IdempotencyRecord struct {
+	Key                string
+	RequestFingerprint string // hex-encoded SHA-256
+	ResponseStatus     int
+	ResponseBody       []byte
+	CreatedAt          time.Time
+	ExpiresAt          time.Time
+}
+
+// GetIdempotencyRecord returns the cached response for an
+// Idempotency-Key, ErrNotFound if there isn't one, and any DB error
+// otherwise. Expired keys are treated as not-found.
+func (s *Store) GetIdempotencyRecord(ctx context.Context, key string) (IdempotencyRecord, error) {
+	var rec IdempotencyRecord
+	err := s.pool.QueryRow(ctx,
+		`SELECT key, request_fingerprint, response_status, response_body, created_at, expires_at
+		   FROM idempotency_keys
+		  WHERE key = $1 AND expires_at > NOW()`, key,
+	).Scan(&rec.Key, &rec.RequestFingerprint, &rec.ResponseStatus, &rec.ResponseBody, &rec.CreatedAt, &rec.ExpiresAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return IdempotencyRecord{}, ErrNotFound
+		}
+		return IdempotencyRecord{}, fmt.Errorf("get idempotency record: %w", err)
+	}
+	return rec, nil
+}
+
+// SaveIdempotencyRecord stores a cached response. Conflicts on the key
+// are ignored — the existing record (which would have been returned
+// by GetIdempotencyRecord on the racing request) wins.
+func (s *Store) SaveIdempotencyRecord(ctx context.Context, rec IdempotencyRecord) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO idempotency_keys (key, request_fingerprint, response_status, response_body, expires_at)
+		 VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (key) DO NOTHING`,
+		rec.Key, rec.RequestFingerprint, rec.ResponseStatus, rec.ResponseBody, rec.ExpiresAt,
+	)
+	if err != nil {
+		return fmt.Errorf("save idempotency record: %w", err)
+	}
+	return nil
+}

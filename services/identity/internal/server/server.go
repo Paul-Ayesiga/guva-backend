@@ -11,9 +11,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -212,8 +216,61 @@ type createConsumerResponse struct {
 	SecretDisclosureNote  string `json:"_note"`
 }
 
+// idempotencyTTL is how long a cached response stays replayable. Tuned
+// to cover realistic retry windows (timeouts, transient network) but
+// short enough that a re-onboarding effort weeks later doesn't pick up
+// a stale response.
+const idempotencyTTL = 24 * time.Hour
+
 func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadmin.Client, vault *secrets.Client) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Read the raw body so we can both fingerprint it for
+		// Idempotency-Key matching AND still feed it into the JSON
+		// decoder below. http.Request.Body is one-shot — we replace
+		// it with a fresh bytes.Reader after the slurp.
+		rawBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			problem.Write(w, http.StatusBadRequest, "invalid_request", "could not read request body")
+			return
+		}
+
+		// Idempotency-Key handling — if the caller supplies a key,
+		// look up any cached response and either replay it (same body
+		// fingerprint) or reject (fingerprint mismatch = client bug).
+		idemKey := r.Header.Get("Idempotency-Key")
+		var fingerprint string
+		if idemKey != "" {
+			sum := sha256.Sum256(rawBody)
+			fingerprint = hex.EncodeToString(sum[:])
+
+			cached, err := st.GetIdempotencyRecord(r.Context(), idemKey)
+			switch {
+			case err == nil:
+				if cached.RequestFingerprint != fingerprint {
+					problem.Write(w, http.StatusUnprocessableEntity, "idempotency_fingerprint_mismatch",
+						"this Idempotency-Key was previously used with a different request body")
+					return
+				}
+				logger.InfoContext(r.Context(), "consumer.idempotent_replay",
+					"correlation_id", r.Header.Get("X-Correlation-Id"),
+					"idempotency_key", idemKey,
+					"original_age", time.Since(cached.CreatedAt).String(),
+				)
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Idempotency-Replay", "true")
+				w.WriteHeader(cached.ResponseStatus)
+				_, _ = w.Write(cached.ResponseBody)
+				return
+			case errors.Is(err, store.ErrNotFound):
+				// New key — fall through to create.
+			default:
+				logger.ErrorContext(r.Context(), "idempotency lookup failed; proceeding without dedupe",
+					"idempotency_key", idemKey, "error", err)
+			}
+		}
+
+		r.Body = io.NopCloser(bytes.NewReader(rawBody))
+
 		var req createConsumerRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			problem.Write(w, http.StatusBadRequest, "invalid_request", "request body is not valid JSON")
@@ -336,10 +393,36 @@ func createConsumerHandler(logger *slog.Logger, st *store.Store, kc *keycloakadm
 			resp.SecretVaultPath = vaultPath
 			resp.SecretDisclosureNote += " A backup copy is in Vault at " + vaultPath + " (identity-scoped policy)."
 		}
+
+		// Serialise once so we can both store under the idempotency
+		// key (if any) AND write to the wire. Cache stores the exact
+		// bytes the client receives so replay is byte-identical.
+		respBytes, err := json.Marshal(resp)
+		if err != nil {
+			logger.ErrorContext(r.Context(), "marshal response failed", "error", err)
+			problem.Write(w, http.StatusInternalServerError, "internal_error", "failed to encode response")
+			return
+		}
+		if idemKey != "" {
+			saveErr := st.SaveIdempotencyRecord(r.Context(), store.IdempotencyRecord{
+				Key:                idemKey,
+				RequestFingerprint: fingerprint,
+				ResponseStatus:     http.StatusCreated,
+				ResponseBody:       respBytes,
+				ExpiresAt:          time.Now().Add(idempotencyTTL),
+			})
+			if saveErr != nil {
+				// Non-fatal — the consumer was created, the response
+				// will be returned; we just won't replay this key.
+				logger.WarnContext(r.Context(), "idempotency record save failed; replay won't work",
+					"idempotency_key", idemKey, "error", saveErr)
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Location", "/consumers/"+reg.ID)
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(resp)
+		_, _ = w.Write(respBytes)
 	})
 }
 
