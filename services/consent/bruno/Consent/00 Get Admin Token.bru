@@ -1,0 +1,35 @@
+meta {
+  name: 00 Get Admin Token
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{authBaseUrl}}/realms/{{realm}}/protocol/openid-connect/token
+  body: formUrlEncoded
+  auth: none
+}
+
+headers {
+  Content-Type: application/x-www-form-urlencoded
+}
+
+body:form-urlencoded {
+  grant_type: client_credentials
+  client_id: {{adminClientId}}
+  client_secret: {{adminClientSecret}}
+}
+
+script:post-response {
+  if (res.status === 200 && res.body && res.body.access_token) {
+    bru.setEnvVar("adminAccessToken", res.body.access_token);
+  }
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("has consent scopes", function() {
+    expect(res.body.scope || "").to.include("consent:write");
+    expect(res.body.scope || "").to.include("consent:read");
+  });
+}

@@ -1,0 +1,39 @@
+meta {
+  name: 04 Verify Citizen (deceased)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{apiBaseUrl}}/citizen
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "nin": "CM72042098765004",
+    "given_name": "Patrick"
+  }
+}
+
+docs {
+  Mock record is flagged deceased. The deceased status overrides
+  attribute matching — consumers must not treat this as a "verified"
+  outcome even when the claimed attributes happen to match.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("status deceased", function() {
+    expect(res.body.status).to.equal("deceased");
+  });
+}

@@ -1,0 +1,23 @@
+meta {
+  name: 01 Backend Probe
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{apiBaseUrl}}/backend
+  auth: none
+}
+
+docs {
+  Operator-facing — returns whichever backend the service was
+  started with. Defaults to "simulator" in dev. Flip via
+  NIRA_BACKEND=upstream + the cert/url env vars.
+}
+
+tests {
+  test("status 200", function() { expect(res.status).to.equal(200); });
+  test("backend is simulator or upstream", function() {
+    expect(["simulator","upstream"]).to.include(res.body.backend);
+  });
+}

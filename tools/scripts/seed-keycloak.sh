@@ -80,7 +80,7 @@ existing_scopes_json=$(api GET "/admin/realms/${REALM}/client-scopes")
 # ---- 2. admin client -----------------------------------------------------
 ADMIN_CLIENT_ID="guva-platform-admin"
 ADMIN_CLIENT_SECRET="platform-admin-dev-secret"
-ADMIN_DEFAULT_SCOPES=(audit:read admin:consumers admin:scopes admin:audit admin:keys admin:webhooks)
+ADMIN_DEFAULT_SCOPES=(audit:read admin:consumers admin:scopes admin:audit admin:keys admin:webhooks consent:read consent:write)
 
 existing_clients_json=$(api GET "/admin/realms/${REALM}/clients?clientId=${ADMIN_CLIENT_ID}")
 admin_internal_id=$(python3 -c '

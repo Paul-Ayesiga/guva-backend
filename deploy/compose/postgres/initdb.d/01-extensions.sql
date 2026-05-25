@@ -43,3 +43,7 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 \connect guva_webhooks
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+\connect guva_integrations_nira
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;

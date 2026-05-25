@@ -1,0 +1,61 @@
+meta {
+  name: 01 Create Grant
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{apiBaseUrl}}/grants
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "citizen_nin": "CF95071587654003",
+    "consumer_id": "guva-reference",
+    "upstream": "NIRA",
+    "purpose": "demo-loan-application",
+    "allowed_attributes": ["nin","given_name","surname","date_of_birth"],
+    "ttl": "24h"
+  }
+}
+
+docs {
+  Citizen Grace authorises guva-reference to verify her NIN +
+  name + DOB against NIRA for 24 hours.
+
+  The response includes the Ed25519-signed assertion JWT. The
+  consent service stores this and reissues on GET; an external
+  regulator can verify the JWT independently with the public key
+  from /v1/consent/signing-key.
+
+  Stashes `subscriptionId`... wait, `grantId` for the next requests
+  in this collection.
+}
+
+script:post-response {
+  if (res.status === 201 && res.body && res.body.id) {
+    bru.setEnvVar("grantId", res.body.id);
+  }
+}
+
+tests {
+  test("status is 201", function() { expect(res.status).to.equal(201); });
+  test("returns signed assertion", function() {
+    expect(res.body.assertion_jwt).to.match(/^[\w-]+\.[\w-]+\.[\w-]+$/);
+  });
+  test("subject is hashed not raw", function() {
+    expect(res.body.citizen_subject_hash).to.match(/^[0-9a-f]{64}$/);
+    var json = JSON.stringify(res.body);
+    expect(json).to.not.include("CF95071587654003");
+  });
+}

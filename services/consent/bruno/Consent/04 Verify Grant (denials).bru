@@ -1,0 +1,33 @@
+meta {
+  name: 04 Verify Grant (denials)
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{apiBaseUrl}}/grants/{{grantId}}/verify?consumer_id=guva-reference&attributes=nin,mother_maiden_name
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+docs {
+  Asks for an attribute (mother_maiden_name) that wasn't in the
+  grant's allowed_attributes set. Outcome: attribute_not_allowed.
+
+  Swap consumer_id to a different value to see consumer_mismatch.
+  Wait past expires_at (or shorten ttl on grant creation) to see
+  expired.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("outcome attribute_not_allowed", function() {
+    expect(res.body.status).to.equal("attribute_not_allowed");
+  });
+  test("no assertion shipped on denial", function() {
+    expect(res.body.assertion_jwt).to.be.oneOf([undefined, ""]);
+  });
+}

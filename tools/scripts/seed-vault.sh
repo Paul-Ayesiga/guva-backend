@@ -65,6 +65,10 @@ write_kv "services/identity/config" \
 write_kv "services/audit/config" \
   "db-writer-password=audit-writer-dev" \
   "db-reader-password=audit-reader-dev"
+write_kv "services/verification/config" \
+  "db-password=guva"
 
+write_kv "services/consent/config" \
+  "db-password=guva"
 echo "==> Done. Inspect with:"
 echo "    VAULT_ADDR=${VAULT_ADDR} VAULT_TOKEN=${VAULT_TOKEN} vault kv get secret/services/reference/config"

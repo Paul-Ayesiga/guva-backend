@@ -37,9 +37,16 @@ set -a
 source .env
 set +a
 
-# Service directories may use kebab-case (e.g. apisix-adapter); Postgres
-# identifiers can't carry unquoted hyphens, so map them to underscores.
-DB_NAME="guva_${SERVICE//-/_}"
+# Service identifiers in this script may include hyphens (kebab-case
+# dirs like apisix-adapter) AND slashes (nested integration adapters
+# like integrations/nira). Postgres identifiers permit neither
+# unquoted; map both onto underscore so the DB name follows the dir
+# path one-to-one. So:
+#   apisix-adapter        → guva_apisix_adapter
+#   integrations/nira     → guva_integrations_nira
+NORMALISED="${SERVICE//-/_}"
+NORMALISED="${NORMALISED//\//_}"
+DB_NAME="guva_${NORMALISED}"
 DSN="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${DB_NAME}?sslmode=disable"
 
 command -v migrate >/dev/null || {

@@ -1,0 +1,184 @@
+openapi: 3.1.0
+info:
+  title: GUVA Consent
+  version: "0.1.0"
+  description: |
+    Citizen-authorisation records the verification path consults
+    before calling agency upstreams. Each grant carries an Ed25519-
+    signed assertion (JWT-like) so external regulators can prove the
+    platform issued it.
+
+    See `docs/CONSENT.md` for the full architecture + audit-chain
+    semantics.
+
+servers:
+  - url: http://localhost:8000/v1/consent
+    description: Through the APISIX gateway
+  - url: http://localhost:7076
+    description: Direct (development)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /healthz: { get: { tags: [ops], summary: Liveness, security: [], responses: { "200": { description: alive } } } }
+  /readyz:  { get: { tags: [ops], summary: Readiness, security: [], responses: { "200": { description: ready }, "503": { description: not ready } } } }
+
+  /grants:
+    post:
+      tags: [grants]
+      summary: Create a new consent grant
+      description: |
+        Citizen authorises a consumer to verify a specific attribute
+        set against a specific upstream agency, for a stated purpose,
+        until a stated expiry.
+
+        The response includes the full signed assertion JWT. This is
+        the only point at which the assertion is returned in the
+        token form — subsequent GETs return the assertion text but
+        store it alongside the row (operational forensics).
+
+        Requires `consent:write`. In production the citizen-facing
+        flow gathers the request body via a UI and POSTs on behalf
+        of the citizen after authentication; in dev the admin token
+        creates grants directly.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [citizen_nin, consumer_id, upstream, allowed_attributes, ttl]
+              properties:
+                citizen_nin:        { type: string, example: "CF95071587654003" }
+                consumer_id:        { type: string, example: "guva-reference" }
+                upstream:           { type: string, example: "NIRA" }
+                purpose:            { type: string, example: "loan-application" }
+                allowed_attributes:
+                  type: array
+                  items: { type: string }
+                  example: ["nin","given_name","surname","date_of_birth"]
+                ttl:
+                  type: string
+                  description: Go duration string (e.g. 24h, 168h, 720h). Max 8760h (1 year).
+                  example: "24h"
+      responses:
+        "201":
+          description: Created — includes signed assertion (returned only here)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GrantWithAssertion' }
+
+  /grants/{id}:
+    get:
+      tags: [grants]
+      summary: Get a single grant
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GrantWithAssertion' }
+        "404": { description: no grant with that id }
+
+  /grants/{id}/revoke:
+    post:
+      tags: [grants]
+      summary: Revoke a grant
+      description: |
+        Idempotent — already-revoked grants return their existing
+        revocation state. The append-only trigger on consent_grants
+        guarantees that nothing else can mutate, even via direct DB
+        access.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, example: "citizen revoked consent" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GrantWithAssertion' }
+        "404": { description: no grant with that id }
+
+  /grants/{id}/verify:
+    get:
+      tags: [grants]
+      summary: Internal validity check (called by verification service)
+      description: |
+        Returns one of:
+          - `granted` (with assertion_jwt) → consumer may proceed
+          - `expired` — past expires_at
+          - `revoked` — revoked_at is set
+          - `consumer_mismatch` — grant exists but for a different consumer
+          - `attribute_not_allowed` — requested attribute set isn't a subset of allowed_attributes
+          - `not_found` — no such grant
+
+        Requires `verify:citizen` (the verification service holds it)
+        OR `consent:read` (admin / dashboard).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: query, name: consumer_id, required: true, schema: { type: string } }
+        - { in: query, name: attributes, schema: { type: string, description: "comma-separated list of requested attribute keys" } }
+      responses:
+        "200":
+          description: Verification outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [granted, expired, revoked, consumer_mismatch, attribute_not_allowed, not_found] }
+                  grant:  { $ref: '#/components/schemas/GrantWithAssertion' }
+                  assertion_jwt:
+                    type: string
+                    description: Only returned when status=granted. Compact JWT-like form, base64url segments joined with dots.
+
+  /signing-key:
+    get:
+      tags: [ops]
+      summary: Current Ed25519 signing key for consent assertions
+      security: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  algorithm:      { type: string, enum: [Ed25519] }
+                  public_key_b64: { type: string }
+                  key_id:         { type: string }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    GrantWithAssertion:
+      type: object
+      properties:
+        id:                   { type: string, format: uuid }
+        citizen_subject_type: { type: string, example: "nin" }
+        citizen_subject_hash: { type: string, description: "SHA-256 of the citizen's NIN (PII never stored raw)" }
+        consumer_id:          { type: string }
+        upstream:             { type: string }
+        purpose:              { type: string }
+        allowed_attributes:
+          type: array
+          items: { type: string }
+        granted_at:           { type: string, format: date-time }
+        expires_at:           { type: string, format: date-time }
+        revoked_at:           { type: string, format: date-time, nullable: true }
+        revocation_reason:    { type: string }
+        assertion_jwt:        { type: string, description: "Ed25519-signed JWT-like assertion" }
+        signing_key_id:       { type: string, description: "First 8 hex chars of SHA-256(public_key)" }

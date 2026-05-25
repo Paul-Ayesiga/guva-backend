@@ -1,0 +1,32 @@
+meta {
+  name: 05 Lookup (revoked)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{apiBaseUrl}}/lookup
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "nin": "CM88010198765005"
+  }
+}
+
+tests {
+  test("status 200", function() { expect(res.status).to.equal(200); });
+  test("status revoked", function() {
+    expect(res.body.record.status).to.equal("revoked");
+  });
+}

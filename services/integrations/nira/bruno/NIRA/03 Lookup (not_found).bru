@@ -1,0 +1,30 @@
+meta {
+  name: 03 Lookup (not_found)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{apiBaseUrl}}/lookup
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "nin": "CM00000000000000"
+  }
+}
+
+tests {
+  test("status 200", function() { expect(res.status).to.equal(200); });
+  test("found false", function() { expect(res.body.found).to.equal(false); });
+}

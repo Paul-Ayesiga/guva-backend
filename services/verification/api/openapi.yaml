@@ -1,0 +1,159 @@
+openapi: 3.1.0
+info:
+  title: GUVA Verification
+  version: "0.1.0"
+  description: |
+    Consent-scoped "does this claim about a citizen match the system
+    of record?" answers. Minimum-disclosure: the response carries no
+    PII the caller didn't already claim — only per-field boolean
+    matches against the upstream record.
+
+    Today: NIRA-backed citizen verification. Future endpoints add
+    business (URSB), tax (URA), land (Lands), education (UNEB),
+    health (MoH) under the same canonical response shape.
+
+servers:
+  - url: http://localhost:8000/v1/verify
+    description: Through the APISIX gateway (production-shaped)
+  - url: http://localhost:7075/verify
+    description: Direct to the verification service (development; bypasses the gateway)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      tags: [ops]
+      summary: Liveness
+      security: []
+      responses: { "200": { description: alive } }
+
+  /readyz:
+    get:
+      tags: [ops]
+      summary: Readiness
+      security: []
+      responses:
+        "200": { description: ready }
+        "503": { description: not ready }
+
+  /citizen:
+    post:
+      tags: [citizen]
+      summary: Verify a citizen against NIRA
+      description: |
+        Caller asserts the citizen's NIN plus zero or more identity
+        attributes. The service looks the record up in NIRA and
+        returns per-attribute match results, never echoing back any
+        attribute the caller did not claim. Outcome status reflects
+        the worst-case finding (deceased / revoked override
+        attribute-level matches; not_found short-circuits everything).
+
+        Requires the `verify:citizen` scope. Every call (success or
+        failure) lands as `verification.citizen.queried` on the audit
+        chain with the subject *hashed* — no PII enters the chain.
+
+        Identical request bodies from the same consumer within
+        `VERIFICATION_CACHE_TTL` (default 15m) return cached results;
+        responses carry `X-Guva-Cache: hit` on a cache hit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nin]
+              properties:
+                nin:                { type: string, example: "CM91051512345001" }
+                given_name:         { type: string, example: "Sarah" }
+                middle_name:        { type: string }
+                surname:            { type: string, example: "Nakato" }
+                date_of_birth:      { type: string, format: date, example: "1991-05-15" }
+                sex:                { type: string, enum: [M, F] }
+                mother_maiden_name: { type: string }
+                consent_reference:
+                  type: string
+                  description: |
+                    Citizen-issued consent token. Will be verified against
+                    the consent service once that workstream ships; today
+                    it is recorded in the audit chain as opaque text.
+      responses:
+        "200":
+          description: Canonical verification response
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerificationResponse' }
+              examples:
+                verified:
+                  value:
+                    verification_id: "ver_8c9cd1d1-8c71-4c8c-8c23-e9cae6fb2ea0"
+                    consumer: "guva-reference"
+                    subject: { type: nin, value: "CM91051512345001" }
+                    checked_at: "2026-05-25T01:39:27Z"
+                    status: verified
+                    attributes:
+                      nin:           { match: true, source: NIRA }
+                      given_name:    { match: true, source: NIRA }
+                      surname:       { match: true, source: NIRA }
+                      date_of_birth: { match: true, source: NIRA }
+                    metadata:
+                      data_freshness: "2026-01-10T08:00:00Z"
+                      source: NIRA
+                      upstream_latency_ms: 60
+                mismatch:
+                  value:
+                    status: mismatch
+                    attributes:
+                      given_name: { match: true,  source: NIRA }
+                      surname:    { match: false, source: NIRA }
+                not_found:
+                  value: { status: not_found, attributes: {} }
+                deceased:
+                  value: { status: deceased }
+                revoked:
+                  value: { status: revoked }
+        "400": { description: missing nin or malformed body }
+        "401": { description: missing or invalid bearer token }
+        "403": { description: token does not carry verify:citizen }
+        "502": { description: NIRA upstream unavailable }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    VerificationResponse:
+      type: object
+      required: [verification_id, consumer, subject, checked_at, status, attributes, metadata]
+      properties:
+        verification_id: { type: string }
+        consumer:        { type: string, description: "JWT azp claim (the calling client)" }
+        subject:
+          type: object
+          properties:
+            type:  { type: string, example: nin }
+            value: { type: string }
+        checked_at: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [verified, mismatch, not_found, deceased, revoked, consent_invalid, error]
+        attributes:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              match:  { type: boolean }
+              source: { type: string, example: NIRA }
+              note:   { type: string }
+        metadata:
+          type: object
+          properties:
+            consent_reference:    { type: string }
+            data_freshness:       { type: string, format: date-time }
+            source:               { type: string, example: NIRA }
+            upstream_latency_ms:  { type: integer }
+            correlation_id:       { type: string, format: uuid }

@@ -157,6 +157,9 @@ services/<name>/
 | [docs/OPERATIONS.md](./docs/OPERATIONS.md) | Platform-wide operational notes (gotchas worth a script-fix and a paragraph) |
 | [docs/AUTH.md](./docs/AUTH.md) | Identity, OIDC validation, admin RBAC, workload mTLS pattern |
 | [docs/AUDIT.md](./docs/AUDIT.md) | Audit chain architecture, producer contract, schema discipline, SIEM export, Merkle anchoring |
+| [docs/VERIFICATION.md](./docs/VERIFICATION.md) | Verification engine — canonical citizen model, minimum-disclosure contract, mock NIRA |
+| [docs/CONSENT.md](./docs/CONSENT.md) | Consent management — grant record, Ed25519-signed assertions, consent×verification dance |
+| [docs/INTEGRATIONS.md](./docs/INTEGRATIONS.md) | Agency adapter pattern — boundary, simulator/upstream split, playbook for adding URSB/URA/Lands/UNEB/MoH |
 | [../guva-docs/09-delivery/01-implementation-plan.md](../guva-docs/09-delivery/01-implementation-plan.md) | Workstream organisation that this repo implements |
 | [../guva-docs/03-architecture/07-system-architecture.md](../guva-docs/03-architecture/07-system-architecture.md) | The architectural shape the services collectively form |
 | [../guva-docs/06-infrastructure/19-recommended-tech-stack.md](../guva-docs/06-infrastructure/19-recommended-tech-stack.md) | Why we use what we use |

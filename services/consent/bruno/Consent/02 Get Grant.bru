@@ -1,0 +1,21 @@
+meta {
+  name: 02 Get Grant
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{apiBaseUrl}}/grants/{{grantId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("id matches stashed", function() {
+    expect(res.body.id).to.equal(bru.getEnvVar("grantId"));
+  });
+}

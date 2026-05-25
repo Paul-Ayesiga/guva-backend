@@ -5,8 +5,11 @@ use (
 	./pkg/secrets
 	./services/apisix-adapter
 	./services/audit
+	./services/consent
 	./services/identity
+	./services/integrations/nira
 	./services/reference
+	./services/verification
 	./services/webhooks
 	./tools/audit-verify
 )

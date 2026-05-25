@@ -1,0 +1,116 @@
+openapi: 3.1.0
+info:
+  title: GUVA NIRA Integration Service
+  version: "0.1.0"
+  description: |
+    The agency-side adapter for the National Identification and
+    Registration Authority. Translates between NIRA's native wire
+    format and the platform's NIRA-canonical record. Two pluggable
+    backends:
+
+      - simulator: in-memory canned set, default for dev / demos
+      - upstream:  production HTTP client with mTLS + retries +
+                   circuit breaker against the real NIRA endpoint
+
+    INTERNAL-ONLY. There is no public APISIX route; verification (and
+    any future internal caller) reaches this service directly over
+    the docker / pod network.
+
+servers:
+  - url: http://localhost:7080
+    description: Direct (development)
+  - url: http://integrations-nira:7080
+    description: From inside the cluster
+
+security:
+  - bearerAuth: []
+
+paths:
+  /healthz: { get: { tags: [ops], summary: Liveness, security: [], responses: { "200": { description: alive } } } }
+  /readyz:  { get: { tags: [ops], summary: Readiness, security: [], responses: { "200": { description: ready }, "503": { description: not ready } } } }
+
+  /backend:
+    get:
+      tags: [ops]
+      summary: Which backend is the service running?
+      security: []
+      responses:
+        "200":
+          description: backend name
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  backend:
+                    type: string
+                    enum: [simulator, upstream]
+
+  /lookup:
+    post:
+      tags: [lookup]
+      summary: Look up a citizen record by NIN
+      description: |
+        Requires `verify:citizen` (the verification service holds it
+        through its own client-credentials token).
+
+        On success returns the canonical record (or `found: false` if
+        NIRA has no record for the NIN). On upstream failure returns
+        a structured problem; the verification handler maps these
+        to `status=error` + HTTP 502 for its own callers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nin]
+              properties:
+                nin:            { type: string, example: "CM91051512345001" }
+                correlation_id: { type: string, format: uuid, description: Propagated into the audit chain entry. }
+      responses:
+        "200":
+          description: lookup result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LookupResponse' }
+        "400": { description: missing or invalid nin }
+        "401": { description: missing or invalid bearer }
+        "403": { description: token does not carry verify:citizen }
+        "502":
+          description: NIRA upstream unavailable after retries
+        "503":
+          description: NIRA upstream circuit breaker is open
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    LookupResponse:
+      type: object
+      required: [lookup_id, found, record]
+      properties:
+        lookup_id: { type: string, format: uuid }
+        found:     { type: boolean }
+        record:    { $ref: '#/components/schemas/Record' }
+    Record:
+      description: |
+        The NIRA-canonical record. Zero-valued when `found` is false.
+      type: object
+      properties:
+        nin:                 { type: string }
+        given_name:          { type: string }
+        middle_name:         { type: string }
+        surname:             { type: string }
+        date_of_birth:       { type: string, format: date }
+        sex:                 { type: string, enum: [M, F] }
+        nationality:         { type: string }
+        mother_maiden_name:  { type: string }
+        status:
+          type: string
+          enum: [active, deceased, revoked]
+        last_updated_at:     { type: string, format: date-time }

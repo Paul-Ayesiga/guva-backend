@@ -1,0 +1,37 @@
+meta {
+  name: 05 Verify Citizen (revoked)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{apiBaseUrl}}/citizen
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "nin": "CM88010198765005"
+  }
+}
+
+docs {
+  Mock record is flagged revoked (e.g. NIN withdrawn for fraud).
+  Like deceased, this overrides attribute matching.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("status revoked", function() {
+    expect(res.body.status).to.equal("revoked");
+  });
+}

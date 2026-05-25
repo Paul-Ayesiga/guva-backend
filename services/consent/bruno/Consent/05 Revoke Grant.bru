@@ -1,0 +1,39 @@
+meta {
+  name: 05 Revoke Grant
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{apiBaseUrl}}/grants/{{grantId}}/revoke
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "reason": "demo: revoking after walk-through"
+  }
+}
+
+docs {
+  Idempotent — re-running returns the same already-revoked state.
+  The append-only trigger on consent_grants forbids any other
+  mutation; only revoked_at + revocation_reason can change after
+  insert.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("revoked_at populated", function() {
+    expect(res.body.revoked_at).to.be.a("string");
+  });
+}

@@ -1,0 +1,29 @@
+meta {
+  name: 03 Verify Grant (granted)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{apiBaseUrl}}/grants/{{grantId}}/verify?consumer_id=guva-reference&attributes=nin,given_name
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminAccessToken}}
+}
+
+docs {
+  The internal check the verification service calls. With the right
+  consumer + a subset of allowed attributes, returns `granted` and
+  ships the assertion_jwt so the caller can pin it in their audit
+  chain entry.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("outcome granted", function() {
+    expect(res.body.status).to.equal("granted");
+    expect(res.body.assertion_jwt).to.be.a("string").and.have.length.greaterThan(40);
+  });
+}

@@ -1,0 +1,39 @@
+meta {
+  name: 04 Lookup (deceased)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{apiBaseUrl}}/lookup
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "nin": "CM72042098765004"
+  }
+}
+
+docs {
+  Patrick Ssali — record exists but is flagged deceased. The
+  integration service surfaces the status at the record level;
+  verification translates this to its canonical "deceased" status
+  override regardless of attribute matches.
+}
+
+tests {
+  test("status 200", function() { expect(res.status).to.equal(200); });
+  test("status deceased", function() {
+    expect(res.body.record.status).to.equal("deceased");
+  });
+}

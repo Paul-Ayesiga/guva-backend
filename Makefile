@@ -189,6 +189,13 @@ migrate: ## Run migrations for every service that has actual .sql files.
 	    bash tools/scripts/db-migrate.sh $$s up; \
 	  fi; \
 	done
+	@# Nested integration services: discovered under services/integrations/*/
+	@for s in $(notdir $(wildcard $(SERVICES_DIR)/integrations/*)); do \
+	  if ls $(SERVICES_DIR)/integrations/$$s/migrations/*.sql >/dev/null 2>&1; then \
+	    echo "==> migrate integrations/$$s"; \
+	    bash tools/scripts/db-migrate.sh integrations/$$s up; \
+	  fi; \
+	done
 
 # ---- Go: lint / format / test ---------------------------------------------
 .PHONY: fmt
@@ -224,8 +231,12 @@ build: ## Build all service binaries into ./bin.
 
 # ---- Run a service against the local stack --------------------------------
 .PHONY: run-%
-run-%: ## Run a service in the foreground, e.g. `make run-reference`.
+run-%: ## Run a service in the foreground, e.g. `make run-reference` or `make run-integrations/nira`.
 	@cd $(SERVICES_DIR)/$* && $(GO) run ./cmd/server
+
+.PHONY: run-nira-integration
+run-nira-integration: ## Shortcut for `make run-integrations/nira`.
+	@$(MAKE) run-integrations/nira
 
 # ---- Convenience ----------------------------------------------------------
 .PHONY: urls
@@ -250,6 +261,9 @@ urls: ## Print local service URLs.
 	  "Audit svc         http://localhost:7072  (run: make run-audit;    through gateway: /v1/audit/*)" \
 	  "APISIX-adapter    http://localhost:7073  (run: make run-apisix-adapter; receives gateway access logs)" \
 	  "Webhooks svc      http://localhost:7074  (run: make run-webhooks; through gateway: /v1/webhooks/*)" \
+	  "Verification svc  http://localhost:7075  (run: make run-verification; through gateway: /v1/verify/*)" \
+	  "Consent svc       http://localhost:7076  (run: make run-consent; through gateway: /v1/consent/*)" \
+	  "NIRA integration  http://localhost:7080  (run: make run-nira-integration; internal-only, no gateway)" \
 	  "Loki              http://localhost:3100  (log search, exposed via Grafana \"Audit — Log search\" dashboard)"
 
 .PHONY: clean

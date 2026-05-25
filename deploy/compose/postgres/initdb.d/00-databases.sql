@@ -20,6 +20,8 @@ CREATE DATABASE guva_apisix_adapter;
 -- trail. Delivery jobs flow through RabbitMQ; this DB is the source of
 -- truth for "did this consumer get notified about that event".
 CREATE DATABASE guva_webhooks;
+-- Per-agency integration adapter DBs; each agency adapter owns one.
+CREATE DATABASE guva_integrations_nira;
 
 -- Keycloak's own backing store.
 CREATE DATABASE keycloak;

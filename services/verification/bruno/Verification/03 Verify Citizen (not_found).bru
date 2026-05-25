@@ -1,0 +1,42 @@
+meta {
+  name: 03 Verify Citizen (not_found)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{apiBaseUrl}}/citizen
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "nin": "CM00000000000000",
+    "given_name": "Ghost"
+  }
+}
+
+docs {
+  NIN not in the mock NIRA data set. Expect status=not_found and
+  empty attributes (no claimed attributes can be matched without a
+  record).
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("not_found", function() {
+    expect(res.body.status).to.equal("not_found");
+  });
+  test("attributes empty", function() {
+    expect(Object.keys(res.body.attributes || {})).to.have.length(0);
+  });
+}

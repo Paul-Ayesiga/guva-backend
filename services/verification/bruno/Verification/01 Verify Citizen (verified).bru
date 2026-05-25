@@ -1,0 +1,55 @@
+meta {
+  name: 01 Verify Citizen (verified)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{apiBaseUrl}}/citizen
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "nin": "CM91051512345001",
+    "given_name": "Sarah",
+    "surname": "Nakato",
+    "date_of_birth": "1991-05-15",
+    "consent_reference": "consent_demo_001"
+  }
+}
+
+docs {
+  Happy path — every claimed attribute matches the seeded mock NIRA
+  record. Expect `status: verified` and all attribute `match: true`.
+  Re-running within 15 minutes returns the same response with
+  `X-Guva-Cache: hit`.
+
+  The audit chain receives `verification.citizen.queried` with the
+  subject hashed (SHA-256 of the NIN) — no PII in the ledger.
+}
+
+tests {
+  test("status is 200", function() { expect(res.status).to.equal(200); });
+  test("verification status verified", function() {
+    expect(res.body.status).to.equal("verified");
+  });
+  test("all claimed attributes matched", function() {
+    Object.values(res.body.attributes).forEach(function(a) {
+      expect(a.match).to.equal(true);
+    });
+  });
+  test("subject echoed back unmodified", function() {
+    expect(res.body.subject.type).to.equal("nin");
+    expect(res.body.subject.value).to.equal("CM91051512345001");
+  });
+}

@@ -1,0 +1,39 @@
+meta {
+  name: 02 Lookup (found)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{apiBaseUrl}}/lookup
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "nin": "CM91051512345001"
+  }
+}
+
+docs {
+  Sarah Nakato — the always-active happy-path record. Returns
+  canonical record + found:true.
+}
+
+tests {
+  test("status 200", function() { expect(res.status).to.equal(200); });
+  test("found", function() { expect(res.body.found).to.equal(true); });
+  test("record looks canonical", function() {
+    expect(res.body.record.nin).to.equal("CM91051512345001");
+    expect(res.body.record.status).to.equal("active");
+  });
+}
